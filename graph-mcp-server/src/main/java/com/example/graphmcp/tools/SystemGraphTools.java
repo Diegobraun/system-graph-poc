@@ -60,7 +60,7 @@ public class SystemGraphTools {
             Full picture of one service: REST endpoints and GraphQL operations it exposes (and who calls each one), \
             HTTP and GraphQL calls it makes, \
             Kafka topics it publishes and consumes (with the other side of each topic), services that depend on it, \
-            and team notes about it. Use it to understand a service before working on it.""")
+            calls seen at runtime by an APM when imported, and team notes about it. Use it to understand a service before working on it.""")
     public Map<String, Object> serviceOverview(@ToolParam(description = "Service name, same as spring.application.name, e.g. account-service") String service) {
         List<Map<String, Object>> rows = graph.read("""
                 MATCH (s:Service {name: $service})
@@ -69,7 +69,8 @@ public class SystemGraphTools {
                        s.repository AS repository,
                        s.commitSha AS commitSha,
                        s.extractedAt AS extractedAt,
-                       [(s)-[r:EXPOSES]->(e) | {protocol: e.protocol, method: e.method, path: e.path, handler: r.handler,
+                       s.contractSource AS contractSource,
+                       [(s)-[r:EXPOSES]->(e) | {protocol: e.protocol, method: e.method, path: e.path, handler: r.handler, source: r.source,
                            calledBy: [(c:Service)-[:CALLS]->(e) | c.name]}] AS exposes,
                        [(s)-[r:CALLS]->(e) | {service: e.service, protocol: e.protocol, via: r.via, method: e.method, path: e.path,
                            location: r.location, confidence: r.confidence}] AS calls,
@@ -80,6 +81,8 @@ public class SystemGraphTools {
                        s.graphqlSchema AS graphqlSchema,
                        [(d:Service)-[:DEPENDS_ON]->(s) | d.name] AS dependents,
                        [(s)-[:DEPENDS_ON]->(d:Service) | d.name] AS dependsOn,
+                       [(s)-[r:OBSERVED_CALLS]->(d:Service) | {service: d.name, source: r.source, count: r.count, observedAt: r.observedAt}] AS observedCalls,
+                       [(d:Service)-[r:OBSERVED_CALLS]->(s) | {service: d.name, source: r.source, count: r.count, observedAt: r.observedAt}] AS observedCallers,
                        %s AS notes
                 """.formatted(NOTES.formatted("s")), Map.of("service", service));
         if (rows.isEmpty()) {
@@ -145,7 +148,8 @@ public class SystemGraphTools {
     @Tool(name = "find_contract_issues", description = """
             Scans the whole graph for integration problems: HTTP or GraphQL calls to operations nobody exposes, GraphQL client \
             documents that are invalid against the server schema, topics consumed with no producer, consumers seen in Kafka \
-            but not declared in code, and producer/consumer payload mismatches.""")
+            but not declared in code, producer/consumer payload mismatches and, when APM data was imported, runtime calls \
+            missing from the code graph.""")
     public Map<String, Object> findContractIssues() {
         List<Map<String, Object>> issues = new ArrayList<>();
         for (Map<String, Object> row : graph.read("""
@@ -153,12 +157,14 @@ public class SystemGraphTools {
                 WHERE NOT ()-[:EXPOSES]->(e)
                 OPTIONAL MATCH (t:Service {name: e.service})
                 RETURN c.name AS caller, c.repository AS repository, e.service AS target, e.method AS method, e.path AS path,
-                       coalesce(e.protocol, 'http') AS protocol, coalesce(t.indexed, false) AS targetIndexed, r.location AS location
+                       coalesce(e.protocol, 'http') AS protocol, coalesce(t.indexed, false) OR t.contractSource IS NOT NULL AS targetIndexed,
+                       t.contractSource AS contractSource, r.location AS location
                 """, Map.of())) {
             boolean indexed = (Boolean) row.get("targetIndexed");
             issues.add(issue(indexed ? "error" : "warning", (String) row.get("protocol"),
                     indexed
-                            ? "%s calls %s %s on %s, but %s does not expose it".formatted(row.get("caller"), row.get("method"), row.get("path"), row.get("target"), row.get("target"))
+                            ? "%s calls %s %s on %s, but %s does not expose it%s".formatted(row.get("caller"), row.get("method"), row.get("path"), row.get("target"), row.get("target"),
+                                    row.get("contractSource") == null ? "" : " (according to its " + row.get("contractSource") + " contract)")
                             : "%s calls %s, which is not indexed in the graph yet".formatted(row.get("caller"), row.get("target")),
                     row));
         }
@@ -212,6 +218,28 @@ public class SystemGraphTools {
                 }
             }
         }
+        List<Map<String, Object>> observedCalls = graph.read("""
+                MATCH (a:Service)-[r:OBSERVED_CALLS]->(b:Service)
+                RETURN a.name AS caller, b.name AS target, r.source AS source, r.count AS count,
+                       EXISTS { (a)-[:DEPENDS_ON]->(b) } AS inCode
+                """, Map.of());
+        for (Map<String, Object> row : observedCalls) {
+            if (!(Boolean) row.get("inCode")) {
+                issues.add(issue("warning", "runtime", "%s calls %s at runtime (seen by %s) but no call was found in the code of %s"
+                        .formatted(row.get("caller"), row.get("target"), row.get("source"), row.get("caller")), row));
+            }
+        }
+        if (!observedCalls.isEmpty()) {
+            for (Map<String, Object> row : graph.read("""
+                    MATCH (a:Service)-[:DEPENDS_ON]->(b:Service)
+                    WHERE NOT (a)-[:OBSERVED_CALLS]->(b) AND EXISTS { (a)-[:OBSERVED_CALLS]->() } AND EXISTS { (a)-[:CALLS]->(:Endpoint {service: b.name}) }
+                    RETURN a.name AS caller, b.name AS target
+                    """, Map.of())) {
+                issues.add(issue("info", "runtime", "%s has code calling %s, but the APM never saw that call (dead code, feature flag or low traffic)"
+                        .formatted(row.get("caller"), row.get("target")), row));
+            }
+        }
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("issueCount", issues.size());
         result.put("issues", issues);
@@ -249,18 +277,19 @@ public class SystemGraphTools {
     public Map<String, Object> graphModel() {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("nodes", Map.of(
-                "Service", "name, indexed, repository, commitSha, extractedAt, graphqlSchema (SDL text, when the service exposes GraphQL)",
+                "Service", "name, indexed, repository, commitSha, extractedAt, graphqlSchema (SDL text, when the service exposes GraphQL), contractSource ('openapi' when endpoints came from an imported spec instead of code)",
                 "Endpoint", "key ('service METHOD /path/{}' for HTTP, 'service QUERY field' for GraphQL), service, method, path, protocol (http|graphql)",
                 "Topic", "name",
                 "Schema", "key, service, topic, side (producer|consumer), className, fieldNames[], fieldTypes[]",
                 "Note", "id, text, author, status (pending|approved|rejected), createdAt"));
         result.put("relationships", List.of(
-                "(Service)-[:EXPOSES {handler}]->(Endpoint)",
+                "(Service)-[:EXPOSES {handler, source (static|openapi)}]->(Endpoint)",
                 "(Service)-[:CALLS {via (rest-client|web-client|feign|http-exchange|graphql|manifest), location, confidence, source, baseUrl, document}]->(Endpoint)",
                 "(Service)-[:DEPENDS_ON {source}]->(Service)",
                 "(Service)-[:PUBLISHES {via, payloadType, location, source}]->(Topic)",
                 "(Service)-[:CONSUMES {via, group, payloadType, location, source}]->(Topic)",
                 "(Service)-[:OBSERVED_CONSUMING {activeMembers, state, observedAt}]->(Topic)",
+                "(Service)-[:OBSERVED_CALLS {source (apm|dynatrace|...), count, observedAt}]->(Service)",
                 "(Service)-[:DEFINES]->(Schema)<-[:HAS_SCHEMA]-(Topic)",
                 "(Note)-[:ABOUT]->(Service|Topic|Endpoint)"));
         result.put("nodeCounts", graph.read("MATCH (n) RETURN labels(n)[0] AS label, count(*) AS count ORDER BY label", Map.of()));

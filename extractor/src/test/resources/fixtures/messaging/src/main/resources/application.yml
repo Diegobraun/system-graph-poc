@@ -1,0 +1,24 @@
+spring:
+  application:
+    name: messaging-fixture
+  kafka:
+    consumer:
+      group-id: messaging-fixture
+  cloud:
+    function:
+      definition: invoiceRequested;riskScored
+    stream:
+      bindings:
+        invoiceRequested-in-0:
+          destination: invoice-requested
+          group: messaging-fixture
+        riskScored-in-0:
+          destination: risk-requests
+        riskScored-out-0:
+          destination: risk-scored
+        audit-out-0:
+          destination: audit-log
+
+app:
+  topics:
+    payments: payments-settled

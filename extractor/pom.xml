@@ -22,6 +22,8 @@
         <junit.version>5.14.4</junit.version>
         <spring.version>6.2.19</spring.version>
         <spring-cloud-openfeign.version>4.3.3</spring-cloud-openfeign.version>
+        <spring-kafka.version>3.3.16</spring-kafka.version>
+        <spring-cloud-stream.version>4.3.3</spring-cloud-stream.version>
     </properties>
 
     <dependencies>
@@ -86,6 +88,18 @@
             <groupId>org.springframework.graphql</groupId>
             <artifactId>spring-graphql</artifactId>
             <version>1.4.6</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+            <version>${spring-kafka.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-stream</artifactId>
+            <version>${spring-cloud-stream.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>

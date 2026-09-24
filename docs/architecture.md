@@ -40,7 +40,7 @@ flowchart LR
 
 | Nó | Chave | Propriedades |
 |---|---|---|
-| `Service` | `name` (= `spring.application.name`) | `indexed`, `repository`, `commitSha`, `extractedAt`, `ingestedAt`, `graphqlSchema` |
+| `Service` | `name` (= `spring.application.name`) | `indexed`, `repository`, `commitSha`, `extractedAt`, `ingestedAt`, `graphqlSchema`, `contractSource` (`openapi`, quando importado) |
 | `Endpoint` | `key` = `serviço MÉTODO /path/{}` ou `serviço QUERY campo` | `service`, `method`, `path`, `protocol` (`http`, `graphql`) |
 | `Topic` | `name` | |
 | `Schema` | `key` = `serviço\|tópico\|lado\|classe` | `side` (producer, consumer), `className`, `fieldNames[]`, `fieldTypes[]` |
@@ -48,11 +48,12 @@ flowchart LR
 
 | Relação | Propriedades |
 |---|---|
-| `EXPOSES` | `handler` (classe#método:linha) |
+| `EXPOSES` | `handler` (classe#método:linha), `source` (`openapi` quando veio de spec) |
 | `CALLS` | `via`, `location` (arquivo:linha), `confidence`, `source`, `baseUrl`, `document` (GraphQL) |
 | `DEPENDS_ON` | `source` |
 | `PUBLISHES` / `CONSUMES` | `via`, `payloadType`, `location`, `source`; `CONSUMES` também tem `group` |
 | `OBSERVED_CONSUMING` | `activeMembers`, `state`, `observedAt` |
+| `OBSERVED_CALLS` (Service → Service) | `source` (APM de origem), `count`, `observedAt`. Só existe com os [comandos experimentais](experimental.md) |
 
 Operações GraphQL também são `Endpoint`: cada campo raiz de `Query`, `Mutation` e `Subscription` vira
 `account-service QUERY customer`. Assim `CALLS`, `impact_of_change` e `find_contract_issues` tratam HTTP e
@@ -163,7 +164,8 @@ Serviços referenciados mas nunca extraídos (um client chamando um serviço que
 `Service {indexed: false}`. As tools deixam isso claro para o assistente não tirar conclusão errada.
 
 `OBSERVED_CONSUMING` vem de outra fonte (o `AdminClient` do Kafka) e nunca é apagado pela ingestão do código.
-O comando `kafka-runtime` substitui essas relações inteiras a cada execução.
+O comando `kafka-runtime` substitui essas relações inteiras a cada execução. O mesmo vale para
+`OBSERVED_CALLS`, substituído por `source` a cada importação de APM.
 
 ## MCP server
 

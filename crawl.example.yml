@@ -1,0 +1,27 @@
+workspace: ~/work/system-graph
+output: ~/work/system-graph/.graph
+
+defaults:
+  pull: true
+  build: auto
+  offline: true
+  buildTimeoutMinutes: 15
+
+projects:
+  - path: ~/work/conta-api
+
+  - path: ~/work/emprestimo-api
+    pull: false
+
+  - git: https://gitlab.empresa.com.br/credito/limite-service.git
+    branch: develop
+
+  - name: cobranca-app
+    path: ~/work/cobranca/cobranca-app
+    build: "mvn -q -o -pl cobranca-app -am compile -DskipTests"
+
+  - path: ~/work/antifraude-service
+    build: skip
+
+kafka:
+  bootstrap: localhost:9092

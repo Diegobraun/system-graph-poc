@@ -75,30 +75,32 @@ public final class SourceScanner {
     private record Unit(CompilationUnit cu, Path file) {
     }
 
-    private final Path projectDir;
+    private final ProjectLayout layout;
     private final SpringProperties properties;
     private final ClassIndex classIndex;
     private final Map<String, String> constants = new HashMap<>();
     private final List<Unit> units = new ArrayList<>();
 
-    public SourceScanner(Path projectDir, SpringProperties properties, ClassIndex classIndex) {
-        this.projectDir = projectDir;
+    public SourceScanner(ProjectLayout layout, SpringProperties properties, ClassIndex classIndex) {
+        this.layout = layout;
         this.properties = properties;
         this.classIndex = classIndex;
     }
 
     public Result scan() throws IOException {
-        Path sources = projectDir.resolve("src/main/java");
-        if (!Files.isDirectory(sources)) {
+        if (layout.sourceDirs().isEmpty()) {
             return new Result(List.of(), List.of(), List.of(), List.of(), Map.of(), Map.of());
         }
+        CombinedTypeSolver typeSolver = new CombinedTypeSolver(new ReflectionTypeSolver());
+        layout.sourceDirs().forEach(dir -> typeSolver.add(new JavaParserTypeSolver(dir)));
         JavaParser parser = new JavaParser(new ParserConfiguration()
                 .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21)
-                .setSymbolResolver(new JavaSymbolSolver(new CombinedTypeSolver(
-                        new ReflectionTypeSolver(), new JavaParserTypeSolver(sources)))));
-        try (Stream<Path> files = Files.walk(sources)) {
-            for (Path file : files.filter(f -> f.toString().endsWith(".java")).toList()) {
-                parser.parse(file).getResult().ifPresent(cu -> units.add(new Unit(cu, file)));
+                .setSymbolResolver(new JavaSymbolSolver(typeSolver)));
+        for (Path sources : layout.sourceDirs()) {
+            try (Stream<Path> files = Files.walk(sources)) {
+                for (Path file : files.filter(f -> f.toString().endsWith(".java")).toList()) {
+                    parser.parse(file).getResult().ifPresent(cu -> units.add(new Unit(cu, file)));
+                }
             }
         }
         units.forEach(unit -> indexConstants(unit.cu()));
@@ -548,6 +550,6 @@ public final class SourceScanner {
 
     private String location(Unit unit, Node node) {
         int line = node.getBegin().map(p -> p.line).orElse(0);
-        return projectDir.relativize(unit.file()) + ":" + line;
+        return layout.root().relativize(unit.file()) + ":" + line;
     }
 }

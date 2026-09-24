@@ -23,20 +23,37 @@ public final class Extractor {
 
     private static final String BINDINGS = "spring.cloud.stream.bindings.";
 
+    private final AnnotationSource annotationSource;
+
+    public Extractor() {
+        this(AnnotationScanner.bytecode());
+    }
+
+    public Extractor(AnnotationSource annotationSource) {
+        this.annotationSource = annotationSource;
+    }
+
     public ServiceGraph extract(Path projectDir) throws IOException {
-        Path classes = projectDir.resolve("target/classes");
-        if (!Files.isDirectory(classes)) {
-            throw new IllegalStateException("Compiled classes not found at " + classes + ". Run mvn compile first.");
-        }
-        Path resources = projectDir.resolve("src/main/resources");
+        return extract(ProjectLayout.detect(projectDir));
+    }
+
+    public ServiceGraph extract(ProjectLayout layout) throws IOException {
+        Path projectDir = layout.root();
+        List<Path> resources = layout.resourceDirs();
         SpringProperties properties = SpringProperties.load(resources);
         Manifest manifest = Manifest.load(projectDir);
-        String service = properties.get("spring.application.name")
+        List<String> applicationNames = SpringProperties.applicationNames(resources);
+        if (applicationNames.size() > 1) {
+            System.err.printf("  warning: %s has several spring.application.name values %s, using %s. "
+                    + "Point the crawl at each application module to extract them separately.%n",
+                    projectDir.getFileName(), applicationNames, applicationNames.getFirst());
+        }
+        String service = applicationNames.stream().findFirst()
                 .or(() -> Optional.ofNullable(manifest.service()))
                 .orElse(projectDir.getFileName().toString());
 
-        AnnotationScanner.Result annotations = new AnnotationScanner(properties).scan(classes);
-        SourceScanner.Result sources = new SourceScanner(projectDir, properties, annotations.classIndex()).scan();
+        AnnotationScanner.Result annotations = annotationSource.scan(layout, properties);
+        SourceScanner.Result sources = new SourceScanner(layout, properties, annotations.classIndex()).scan();
 
         Optional<GraphQlScanner.Schema> graphqlSchema = GraphQlScanner.loadSchema(resources);
         List<ExposedEndpoint> exposes = new ArrayList<>(annotations.exposes());
@@ -124,7 +141,7 @@ public final class Extractor {
         return calls;
     }
 
-    private List<HttpCall> graphQlCalls(Path resources, SourceScanner.Result sources) throws IOException {
+    private List<HttpCall> graphQlCalls(List<Path> resources, SourceScanner.Result sources) throws IOException {
         List<HttpCall> calls = new ArrayList<>();
         for (SourceScanner.GraphQlClientCall call : sources.graphQlCalls()) {
             String document = call.documentText();

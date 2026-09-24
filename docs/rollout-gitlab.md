@@ -3,6 +3,10 @@
 Este documento descreve como a POC viraria algo usado de verdade num ambiente com vários repositórios Spring
 Boot no GitLab.
 
+Se não houver acesso ao pipeline, o [crawl local](crawl.md) monta o mesmo grafo a partir da máquina de quem
+tem leitura nos repositórios, e as [fontes experimentais](experimental.md) cobrem serviços sem código
+disponível. O resto deste documento assume o caminho pelo CI.
+
 ## Visão do pipeline
 
 ```mermaid

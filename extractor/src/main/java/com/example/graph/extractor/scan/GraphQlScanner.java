@@ -32,15 +32,17 @@ public final class GraphQlScanner {
     private GraphQlScanner() {
     }
 
-    public static Optional<Schema> loadSchema(Path resourcesDir) throws IOException {
-        Path schemaDir = resourcesDir.resolve("graphql");
-        if (!Files.isDirectory(schemaDir)) {
-            return Optional.empty();
-        }
+    public static Optional<Schema> loadSchema(List<Path> resourceDirs) throws IOException {
         StringBuilder sdl = new StringBuilder();
-        try (Stream<Path> files = Files.walk(schemaDir)) {
-            for (Path file : files.filter(GraphQlScanner::isSchemaFile).sorted().toList()) {
-                sdl.append(Files.readString(file)).append('\n');
+        for (Path resourcesDir : resourceDirs) {
+            Path schemaDir = resourcesDir.resolve("graphql");
+            if (!Files.isDirectory(schemaDir)) {
+                continue;
+            }
+            try (Stream<Path> files = Files.walk(schemaDir)) {
+                for (Path file : files.filter(GraphQlScanner::isSchemaFile).sorted().toList()) {
+                    sdl.append(Files.readString(file)).append('\n');
+                }
             }
         }
         if (sdl.isEmpty()) {
@@ -59,11 +61,13 @@ public final class GraphQlScanner {
         return Optional.of(new Schema(sdl.toString().trim(), operations));
     }
 
-    public static Optional<String> loadDocument(Path resourcesDir, String name) throws IOException {
-        for (String extension : List.of(".graphql", ".gql")) {
-            Path file = resourcesDir.resolve("graphql-documents").resolve(name + extension);
-            if (Files.exists(file)) {
-                return Optional.of(Files.readString(file));
+    public static Optional<String> loadDocument(List<Path> resourceDirs, String name) throws IOException {
+        for (Path resourcesDir : resourceDirs) {
+            for (String extension : List.of(".graphql", ".gql")) {
+                Path file = resourcesDir.resolve("graphql-documents").resolve(name + extension);
+                if (Files.exists(file)) {
+                    return Optional.of(Files.readString(file));
+                }
             }
         }
         return Optional.empty();

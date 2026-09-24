@@ -1,0 +1,15 @@
+workspace: ..
+output: .system-graph
+
+defaults:
+  pull: true
+  build: auto
+  offline: true
+  buildTimeoutMinutes: 10
+
+projects:
+  - git: https://github.com/Diegobraun/system-graph-account-service.git
+  - git: https://github.com/Diegobraun/system-graph-loan-service.git
+
+kafka:
+  bootstrap: localhost:9092

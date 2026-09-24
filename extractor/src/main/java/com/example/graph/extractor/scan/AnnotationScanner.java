@@ -95,7 +95,17 @@ public final class AnnotationScanner {
         this.properties = properties;
     }
 
-    public Result scan(Path classesDir) {
+    public static AnnotationSource bytecode() {
+        return (layout, properties) -> {
+            if (layout.classpath().isEmpty()) {
+                throw new IllegalStateException("Compiled classes not found under " + layout.root()
+                        + ". Build the project first (mvn compile or gradle classes).");
+            }
+            return new AnnotationScanner(properties).scan(layout.classpath());
+        };
+    }
+
+    public Result scan(List<Path> classpath) {
         ClassIndex index = new ClassIndex();
         List<ExposedEndpoint> exposes = new ArrayList<>();
         List<Subscription> listeners = new ArrayList<>();
@@ -104,7 +114,7 @@ public final class AnnotationScanner {
         Map<String, String> graphqlHandlers = new LinkedHashMap<>();
 
         try (ScanResult scan = new ClassGraph()
-                .overrideClasspath(classesDir.toString())
+                .overrideClasspath(classpath)
                 .enableAllInfo()
                 .scan()) {
             for (ClassInfo type : scan.getAllClasses()) {

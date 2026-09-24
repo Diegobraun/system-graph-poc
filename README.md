@@ -28,12 +28,15 @@ Conteúdo deste repositório:
 | [`graph-mcp-server`](graph-mcp-server) | MCP server em Spring AI que responde perguntas sobre o grafo |
 | [`ci`](ci) | Template de GitLab CI que cada serviço inclui para rodar a extração |
 | [`scripts`](scripts) | Scripts para subir tudo, atualizar o grafo e rodar a demo |
-| [`docs`](docs) | [Arquitetura e decisões](docs/architecture.md) e [como levar para a empresa](docs/rollout-gitlab.md) |
+| [`docs`](docs) | [Arquitetura e decisões](docs/architecture.md), [como levar para a empresa](docs/rollout-gitlab.md), [crawl local](docs/crawl.md) e [fontes experimentais](docs/experimental.md) |
 
 Cada serviço extrai só o próprio código, no próprio CI: o workflow `system-graph` de cada repositório baixa o
 `graph-extractor.jar` da [release desta plataforma](https://github.com/Diegobraun/system-graph-poc/releases) e
 gera o `service-graph.json` a cada push. O cruzamento entre serviços acontece no grafo central. Veja
 [repositórios separados](docs/architecture.md#repositórios-separados).
+
+Sem acesso ao pipeline, o mesmo grafo pode ser montado da máquina do dev com o [`crawl`](docs/crawl.md), que
+passa por uma lista de repositórios, faz pull, compila, extrai e grava tudo de uma vez.
 
 ## Arquitetura
 
@@ -116,7 +119,7 @@ git clone https://github.com/Diegobraun/system-graph-poc.git
 cd system-graph-poc
 scripts/clone-services.sh   # clona os dois serviços como pastas irmãs (../system-graph-*-service)
 scripts/start-all.sh        # Kafka + Neo4j no Docker, depois account, loan e MCP server
-scripts/refresh-graph.sh    # compila os serviços, extrai, grava no Neo4j e lê os consumer groups
+scripts/refresh-graph.sh    # crawl: pull, compila, extrai, grava no Neo4j e lê os consumer groups
 scripts/demo-flow.sh        # executa o fluxo de negócio com curl
 ```
 
@@ -128,6 +131,23 @@ scripts/demo-flow.sh        # executa o fluxo de negócio com curl
 | Neo4j Browser | http://localhost:7474 (neo4j / password123) |
 
 Para parar: `scripts/stop-all.sh` (só as aplicações) ou `scripts/stop-all.sh --all` (derruba também o Docker).
+
+## Modo local para os seus projetos
+
+O `refresh-graph.sh` roda o `crawl` com o [`crawl.yml`](crawl.yml) desta POC. Para usar com os projetos do
+trabalho, basta outro arquivo com a lista (caminho local ou URL do git) e rodar o jar da release:
+
+```bash
+java -jar graph-extractor.jar crawl --config ~/work/crawl.yml
+```
+
+Projetos Maven multi-módulo e Gradle são detectados sozinhos. O build padrão é `compile` offline primeiro, e
+um projeto que falha não impede os outros. Detalhes, formato do arquivo e comparação com o modo CI em
+[docs/crawl.md](docs/crawl.md).
+
+Para quando nem compilar dá, ou o código não está disponível, há comandos experimentais separados: extração só
+pelo código-fonte, pelo jar publicado no Nexus, importação de OpenAPI e de chamadas vistas pelo APM (Dynatrace ou
+um JSON genérico). Ficam fora do caminho principal e estão em [docs/experimental.md](docs/experimental.md).
 
 ## O bug que o grafo encontra
 
@@ -255,6 +275,10 @@ RETURN caller.name, e.method, e.path, owner.name, r.location
 - **Documento GraphQL montado em runtime** (string concatenada com variáveis Java) não é lido. Documentos em
   arquivo, constantes e text blocks são.
 - A comparação de tipos é por nome simples (`Long`, `BigDecimal`), não por compatibilidade de JSON.
+- **Um serviço por projeto**: em repositório com várias aplicações, o extrator usa o primeiro
+  `spring.application.name` e avisa. Cada módulo de aplicação precisa entrar no `crawl.yml` separado.
+- **Kotlin**: as classes compiladas entram, mas o código-fonte Kotlin não é lido (cadeias de `RestClient`,
+  `KafkaTemplate` etc. ficam de fora).
 
 ## Stack
 

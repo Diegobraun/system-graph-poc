@@ -13,7 +13,7 @@ public final class ClassIndex {
     private final Map<String, String> classBySimpleName = new HashMap<>();
     private final Map<String, Integer> simpleNameCount = new HashMap<>();
 
-    void add(String className, List<SchemaField> fields) {
+    public void add(String className, List<SchemaField> fields) {
         fieldsByClass.put(className, fields);
         String simple = simpleName(className);
         classBySimpleName.put(simple, className);

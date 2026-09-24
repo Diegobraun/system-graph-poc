@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.example.graph.extractor.model.ServiceGraph;
+import com.example.graph.extractor.support.FixtureProject;
 import java.nio.file.Path;
 import java.util.Set;
 import java.util.stream.Collectors;

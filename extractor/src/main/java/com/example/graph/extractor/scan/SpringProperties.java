@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.io.Reader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,8 +26,32 @@ public final class SpringProperties {
         this.values = values;
     }
 
-    public static SpringProperties load(Path resourcesDir) throws IOException {
+    public static SpringProperties load(List<Path> resourceDirs) throws IOException {
         Map<String, String> values = new LinkedHashMap<>();
+        for (Path dir : resourceDirs) {
+            loadInto(dir, values);
+        }
+        return new SpringProperties(values);
+    }
+
+    public static SpringProperties load(Path resourcesDir) throws IOException {
+        return load(List.of(resourcesDir));
+    }
+
+    public static List<String> applicationNames(List<Path> resourceDirs) throws IOException {
+        List<String> names = new ArrayList<>();
+        for (Path dir : resourceDirs) {
+            Map<String, String> values = new LinkedHashMap<>();
+            loadInto(dir, values);
+            String name = values.get("spring.application.name");
+            if (name != null && !names.contains(name)) {
+                names.add(name);
+            }
+        }
+        return names;
+    }
+
+    private static void loadInto(Path resourcesDir, Map<String, String> values) throws IOException {
         Path properties = resourcesDir.resolve("application.properties");
         if (Files.exists(properties)) {
             try (InputStream in = Files.newInputStream(properties)) {
@@ -49,7 +74,6 @@ public final class SpringProperties {
                 }
             }
         }
-        return new SpringProperties(values);
     }
 
     public static SpringProperties of(Map<String, String> values) {
