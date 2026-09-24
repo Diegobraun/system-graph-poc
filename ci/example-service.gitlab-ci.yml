@@ -1,0 +1,17 @@
+include:
+  - project: platform/system-graph
+    ref: main
+    file: ci/system-graph.gitlab-ci.yml
+
+stages:
+  - build
+  - test
+
+build:
+  stage: build
+  image: maven:3.9-eclipse-temurin-21
+  script:
+    - mvn -B package
+
+system-graph:
+  extends: .system-graph

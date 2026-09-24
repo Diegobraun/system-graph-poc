@@ -1,0 +1,30 @@
+server:
+  port: 8090
+
+spring:
+  application:
+    name: graph-mcp-server
+  main:
+    banner-mode: off
+  neo4j:
+    uri: ${NEO4J_URI:bolt://localhost:7687}
+    authentication:
+      username: ${NEO4J_USER:neo4j}
+      password: ${NEO4J_PASSWORD:password123}
+  ai:
+    mcp:
+      server:
+        name: system-graph
+        version: 0.1.0
+        protocol: STREAMABLE
+        type: SYNC
+        instructions: >
+          System graph of the company's Spring Boot services: REST endpoints, REST calls between services,
+          Kafka topics with producers and consumers, event payload schemas and team notes.
+          Before changing any REST endpoint, response DTO, Kafka event or payload class, call impact_of_change.
+          When working on a service for the first time, call service_overview.
+          Record confirmed business rules or gotchas with record_note.
+
+graph:
+  query-timeout: 5s
+  max-rows: 200

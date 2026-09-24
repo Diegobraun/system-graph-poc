@@ -1,0 +1,11 @@
+service: loan-service
+calls:
+  - service: legacy-scoring
+    method: POST
+    path: /scores
+publishes:
+  - topic: loan-audit
+    payloadType: com.example.loan.messaging.LoanAuditEvent
+consumes:
+  - topic: customer-blocked
+    group: loan-service

@@ -1,0 +1,24 @@
+.system-graph:
+  stage: .post
+  image: maven:3.9-eclipse-temurin-21
+  variables:
+    GRAPH_EXTRACTOR_URL: "${CI_API_V4_URL}/projects/${SYSTEM_GRAPH_PROJECT_ID}/packages/maven/com/example/graph-extractor/0.0.1/graph-extractor-0.0.1.jar"
+  script:
+    - mvn -B -q compile -DskipTests
+    - 'curl -sSfL --header "JOB-TOKEN: ${CI_JOB_TOKEN}" -o /tmp/graph-extractor.jar "${GRAPH_EXTRACTOR_URL}"'
+    - java -jar /tmp/graph-extractor.jar extract --project . --out service-graph.json
+    - java -jar /tmp/graph-extractor.jar ingest service-graph.json
+  artifacts:
+    paths:
+      - service-graph.json
+    expire_in: 30 days
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+.system-graph-runtime:
+  image: eclipse-temurin:21-jre
+  script:
+    - 'curl -sSfL --header "JOB-TOKEN: ${CI_JOB_TOKEN}" -o /tmp/graph-extractor.jar "${GRAPH_EXTRACTOR_URL}"'
+    - java -jar /tmp/graph-extractor.jar kafka-runtime --bootstrap "${KAFKA_BOOTSTRAP}"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
