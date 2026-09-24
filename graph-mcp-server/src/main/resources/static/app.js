@@ -668,7 +668,7 @@ async function load() {
     wheelSensitivity: 0.3,
     autounselectify: true,
     minZoom: 0.2,
-    maxZoom: 3,
+    maxZoom: 1.7,
     layout: {
       name: "cose", animate: false, padding: 40, randomize: true, nodeDimensionsIncludeLabels: true, componentSpacing: 80,
       nodeRepulsion: (n) => (n.hasClass("topic") ? 900000 : 2600000), nodeOverlap: 60,
