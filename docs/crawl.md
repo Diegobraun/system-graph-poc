@@ -63,7 +63,7 @@ mesmo assim.
 
 ## crawl.yml
 
-O desta POC ([`crawl.yml`](../crawl.yml)) aponta para os dois serviços no GitHub. Um exemplo mais próximo de
+O desta POC ([`crawl.yml`](../crawl.yml)) aponta para os sete serviços no GitHub. Um exemplo mais próximo de
 empresa está em [`crawl.example.yml`](../crawl.example.yml):
 
 ```yaml

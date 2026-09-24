@@ -2,7 +2,7 @@
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
-while IFS='|' read -r name path url; do
+while IFS='|' read -r name path url _; do
   dir=$(service_dir "$path")
   if [ -d "$dir/.git" ]; then
     git -C "$dir" pull -q --ff-only && echo "updated $name ($dir)"

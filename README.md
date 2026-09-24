@@ -12,13 +12,24 @@ que o `loan-service` quebra, em qual arquivo e em qual linha, sem ninguém ter a
 
 ## Conteúdo
 
-A POC está dividida em três repositórios, como seria na empresa:
+A POC tem um repositório por serviço, como seria na empresa:
 
-| Repositório | O que é |
-|---|---|
-| **system-graph-poc** (este) | Plataforma: extrator, MCP server, templates de CI, scripts e docs |
-| [system-graph-account-service](https://github.com/Diegobraun/system-graph-account-service) | Clientes e contas. REST, GraphQL (Spring for GraphQL), spring-kafka e um client Feign para o loan-service |
-| [system-graph-loan-service](https://github.com/Diegobraun/system-graph-loan-service) | Empréstimos. Spring Cloud Stream e três clients para o account-service: `RestClient`, `@HttpExchange` e GraphQL |
+| Repositório | Porta | O que é |
+|---|---|---|
+| **system-graph-poc** (este) | 8090 | Plataforma: extrator, MCP server, interface visual, templates de CI, scripts e docs |
+| [system-graph-account-service](https://github.com/Diegobraun/system-graph-account-service) | 8081 | Clientes e contas. REST, GraphQL (Spring for GraphQL), spring-kafka, Feign para loan e customer |
+| [system-graph-loan-service](https://github.com/Diegobraun/system-graph-loan-service) | 8082 | Empréstimos. Spring Cloud Stream, `RestClient`, `@HttpExchange` e GraphQL para o account |
+| [system-graph-customer-service](https://github.com/Diegobraun/system-graph-customer-service) | 8083 | KYC e perfil de risco. `@HttpExchange` para o account, `RestClient` para bureau e core-banking |
+| [system-graph-payment-service](https://github.com/Diegobraun/system-graph-payment-service) | 8084 | Pix. GraphQL no account, `WebClient` no customer, `@HttpExchange` no fraud, `StreamBridge` |
+| [system-graph-notification-service](https://github.com/Diegobraun/system-graph-notification-service) | 8085 | Notificações. Consome 6 tópicos, Feign no account, `@HttpExchange` no customer |
+| [system-graph-investment-service](https://github.com/Diegobraun/system-graph-investment-service) | 8086 | CDB e LCI. `RestClient` no account, `@HttpExchange` no customer, publica `investment-applied` |
+| [system-graph-fraud-service](https://github.com/Diegobraun/system-graph-fraud-service) | 8087 | Antifraude. Funções do Stream (`Function` com saída), GraphQL no account |
+
+Todos os estilos de integração comuns em Spring Boot aparecem pelo menos uma vez: `RestClient`, `WebClient`,
+Feign, `@HttpExchange`, client GraphQL, `KafkaTemplate`, `@KafkaListener`, funções do Spring Cloud Stream e
+`StreamBridge`. Também há serviços que o grafo conhece sem ter o código: externos (bureau, pix-gateway,
+sms-gateway, market-data), um legado só com OpenAPI (core-banking) e chamadores vistos só no APM
+(internet-banking-bff, backoffice-portal).
 
 Conteúdo deste repositório:
 
@@ -43,8 +54,8 @@ passa por uma lista de repositórios, faz pull, compila, extrai e grava tudo de 
 ```mermaid
 flowchart LR
     subgraph repos["Repositórios dos serviços"]
-        A["account-service<br/>spring-kafka"]
-        L["loan-service<br/>Spring Cloud Stream"]
+        A["account, customer,<br/>notification, investment<br/>spring-kafka"]
+        L["loan, payment, fraud<br/>Spring Cloud Stream"]
     end
 
     subgraph pipeline["CI de cada serviço ou scripts/refresh-graph.sh"]
@@ -55,8 +66,9 @@ flowchart LR
 
     K[("Kafka")]
     N[("Neo4j")]
-    M["graph-mcp-server<br/>Spring AI MCP"]
+    M["graph-mcp-server<br/>Spring AI MCP + UI"]
     C["Claude Code<br/>Cursor, Copilot..."]
+    B["Navegador<br/>localhost:8090"]
 
     A -- "bytecode + fontes + yml" --> X
     L -- "bytecode + fontes + yml" --> X
@@ -66,6 +78,7 @@ flowchart LR
     R -- "OBSERVED_CONSUMING" --> N
     M -- "Cypher, sessão READ" --> N
     C -- "MCP streamable HTTP /mcp" --> M
+    B -- "/api/*" --> M
 ```
 
 Três etapas independentes:
@@ -82,33 +95,60 @@ Detalhes das regras de extração, do modelo do grafo e das decisões em [docs/a
 ## Fluxo de negócio dos serviços de exemplo
 
 ```mermaid
-sequenceDiagram
-    participant U as Cliente HTTP
-    participant A as account-service
-    participant K as Kafka
-    participant L as loan-service
+flowchart LR
+    A["account-service"]
+    L["loan-service"]
+    C["customer-service"]
+    P["payment-service"]
+    N["notification-service"]
+    I["investment-service"]
+    F["fraud-service"]
+    B(["bureau-service"])
+    CB(["core-banking<br/>OpenAPI"])
 
-    U->>A: POST /customers (renda mensal)
-    U->>A: POST /accounts
-    A->>K: account-opened
-    K->>L: account-opened
-    L->>L: cria oferta pré-aprovada (3x renda)
-    U->>L: GET /credit-analysis/{customerId}
-    L->>A: GraphQL query customer (nome, renda, contas)
-    U->>L: POST /loans
-    L->>A: GET /accounts/{id} (RestClient)
-    L->>A: GET /customers/{id} (@HttpExchange)
-    L->>L: aprova se valor <= 5x renda
-    L->>K: loan-disbursed
-    K->>A: loan-disbursed
-    A->>A: credita o saldo
-    U->>A: GET /accounts/{id}/summary
-    A->>L: GET /loans?accountId= (Feign)
+    AO{{account-opened}}
+    KYC{{customer-kyc-approved}}
+    LD{{loan-disbursed}}
+    PC{{payment-completed}}
+    IA{{investment-applied}}
+    FA{{fraud-alert}}
+
+    A --> AO --> L & C & N
+    C --> KYC --> A & L & I & N
+    L --> LD --> A & C & F & N
+    P --> PC --> A & F & N
+    I --> IA --> A & N
+    F --> FA --> N
+
+    L -. "REST, GraphQL" .-> A
+    L -. REST .-> C
+    A -. Feign .-> L
+    A -. Feign .-> C
+    C -. "@HttpExchange" .-> A
+    C -.-> B
+    C -.-> CB
+    P -. GraphQL .-> A
+    P -. WebClient .-> C
+    P -. "@HttpExchange" .-> F
+    N -. Feign .-> A
+    N -. "@HttpExchange" .-> C
+    I -. REST .-> A
+    I -. "@HttpExchange" .-> C
+    F -. GraphQL .-> A
 ```
 
-Os dois serviços dependem um do outro: o loan chama o account por REST e GraphQL, e o account chama o loan por
-Feign. É o tipo de dependência circular que ninguém lembra que existe até algo quebrar, e aparece direto no grafo
-(`DEPENDS_ON` nos dois sentidos).
+O `scripts/demo-flow.sh` percorre tudo com curl:
+
+1. Cria a cliente no account-service e os contatos no customer-service.
+2. Abre a conta, que nasce `PENDING_KYC`.
+3. O customer-service consome `account-opened` e faz o KYC. A conta fica `ACTIVE` quando chega
+   `customer-kyc-approved`.
+4. Oferta pré-aprovada e análise de crédito no loan-service, com a faixa de risco vinda do customer-service.
+5. Empréstimo, crédito na conta, Pix (com antifraude) e aplicação em CDB.
+6. Confere o saldo final e as notificações que chegaram por 6 tópicos diferentes.
+
+As dependências circulares (account e loan se chamam nos dois sentidos, account e customer também) são o tipo de
+coisa que ninguém lembra que existe até algo quebrar, e aparecem direto no grafo (`DEPENDS_ON` nos dois sentidos).
 
 ## Como rodar
 
@@ -117,20 +157,42 @@ Pré-requisitos: Java 21+, Maven 3.9+, Docker.
 ```bash
 git clone https://github.com/Diegobraun/system-graph-poc.git
 cd system-graph-poc
-scripts/clone-services.sh   # clona os dois serviços como pastas irmãs (../system-graph-*-service)
-scripts/start-all.sh        # Kafka + Neo4j no Docker, depois account, loan e MCP server
-scripts/refresh-graph.sh    # crawl: pull, compila, extrai, grava no Neo4j e lê os consumer groups
+scripts/clone-services.sh   # clona os 7 serviços como pastas irmãs (../system-graph-*-service)
+scripts/start-all.sh        # Kafka + Neo4j no Docker, depois os 7 serviços e o MCP server
 scripts/demo-flow.sh        # executa o fluxo de negócio com curl
+scripts/refresh-graph.sh    # crawl: pull, compila, extrai, grava no Neo4j e lê os consumer groups
+scripts/load-examples.sh    # opcional: contrato OpenAPI do core-banking e chamadas vistas por um APM
 ```
 
 | O quê | Onde |
 |---|---|
-| account-service | http://localhost:8081 |
-| loan-service | http://localhost:8082 |
+| Interface visual | http://localhost:8090 |
 | MCP server | http://localhost:8090/mcp |
+| Serviços | http://localhost:8081 a 8087 (tabela acima) |
 | Neo4j Browser | http://localhost:7474 (neo4j / password123) |
 
 Para parar: `scripts/stop-all.sh` (só as aplicações) ou `scripts/stop-all.sh --all` (derruba também o Docker).
+
+## Interface visual
+
+O `graph-mcp-server` também serve uma página em http://localhost:8090 que desenha o grafo e usa as mesmas
+consultas das tools do MCP:
+
+![Mapa dos serviços](docs/img/ui-map.jpg)
+
+- **Mapa**: serviços, tópicos e chamadas, com cor por tipo (HTTP, GraphQL, Kafka, runtime). Partículas correm na
+  direção de cada chamada ou evento. Serviços tracejados não estão indexados; o core-banking tem só o contrato.
+- **Problemas**: arestas com erro ficam vermelhas e as com aviso âmbar, pulsando. A aba Problemas lista tudo que
+  o `find_contract_issues` encontra; clicar num item aproxima a câmera no trecho do grafo.
+- **Detalhes**: clicar num serviço, tópico ou seta mostra endpoints, quem chama cada um, payloads e o
+  `arquivo:linha` com link para o repositório no commit indexado.
+- **Impacto**: escolha o serviço e o contrato no topo (tópico, `GET /accounts/{id}`, `QUERY customer`,
+  `Customer.monthlyIncome`). O grafo apaga tudo que não é afetado.
+
+![Impacto de mudar account-opened](docs/img/ui-impact.jpg)
+
+É uma página estática (`graph-mcp-server/src/main/resources/static`), com Cytoscape.js via WebJar, sem build de
+frontend e sem acesso à internet em runtime.
 
 ## Modo local para os seus projetos
 
@@ -151,12 +213,12 @@ um JSON genérico). Ficam fora do caminho principal e estão em [docs/experiment
 
 ## O bug que o grafo encontra
 
-Os dois serviços têm, de propósito, uma divergência comum em sistemas sem schema registry. O `account-service`
+O account-service e o loan-service têm, de propósito, uma divergência comum em sistemas sem schema registry. O `account-service`
 publica `account-opened` com `accountId, customerId, openedAt`. O `loan-service` lê o mesmo evento esperando
 `accountId, customerId, monthlyIncome`, e usa `monthlyIncome` para calcular a oferta pré-aprovada.
 
 Nada quebra em runtime. O Jackson preenche `monthlyIncome` com `null`, e a oferta sai com limite zero. É fácil
-ver no passo 3 do `demo-flow.sh`: a cliente tem renda de 8000, o esperado seriam 24000, e chega 0.
+ver no passo 5 do `demo-flow.sh`: a cliente tem renda de 8000, o esperado seriam 24000, e chega 0.
 
 O grafo pega isso comparando as classes de payload dos dois lados, cada uma num repositório:
 
@@ -169,6 +231,18 @@ scripts/mcp-call.sh find_contract_issues
   "severity": "warning",
   "area": "schema",
   "message": "com.example.loan.messaging.AccountOpenedEvent expects 'monthlyIncome' (BigDecimal) but com.example.account.messaging.AccountOpenedEvent never sends it, so it is always null"
+}
+```
+
+O segundo bug é mais direto: o `KycClient` do account-service declara `GET /kyc/{customerId}/documents`, que o
+customer-service não expõe. Em runtime só estoura quando alguém chama `/customers/{id}/documents`; no grafo,
+aparece como erro (aresta vermelha na interface):
+
+```json
+{
+  "severity": "error",
+  "area": "http",
+  "message": "account-service calls GET /kyc/{customerId}/documents on customer-service, but customer-service does not expose it"
 }
 ```
 

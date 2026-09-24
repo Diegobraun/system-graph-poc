@@ -55,7 +55,7 @@ mesmo índice. O resto do extrator (cadeias `RestClient`, `KafkaTemplate`, `Stre
 é o mesmo.
 
 O teste `SourceOnlyParityTest` roda os dois modos sobre as mesmas fixtures (clients HTTP, GraphQL, mensageria,
-Maven multi-módulo e Gradle) e exige resultado idêntico. Nos dois serviços da POC o resultado também é igual.
+Maven multi-módulo e Gradle) e exige resultado idêntico. Nos serviços account e loan da POC o resultado também é igual.
 
 Limites:
 
@@ -86,7 +86,7 @@ extrai dele. Aceita Spring Boot fat jar (`BOOT-INF/classes`, `BOOT-INF/lib`) e j
   como `jar:<nome-do-arquivo>`.
 - Entradas do zip que tentam sair da pasta temporária (`../`) são rejeitadas.
 
-Nos dois serviços da POC, jar + sources dá exatamente o mesmo grafo do modo normal. Sem sources, o loan-service
+No account-service e no loan-service, jar + sources dá exatamente o mesmo grafo do modo normal. Sem sources, o loan-service
 perde a chamada `RestClient`, o client GraphQL e o `StreamBridge`, e o `@HttpExchange` aparece com alvo `unknown`
 (a URL dele vem de `createClient`, que está no código).
 

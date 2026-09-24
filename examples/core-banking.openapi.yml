@@ -1,0 +1,19 @@
+openapi: 3.0.1
+info:
+  title: Core Banking (legado)
+  version: "7.4"
+servers:
+  - url: https://core-banking.interno
+paths:
+  /v1/clients/{document}:
+    get:
+      operationId: getClient
+  /v1/clients/{document}/relationship:
+    get:
+      operationId: getRelationship
+  /v1/clients/{document}/products:
+    get:
+      operationId: listProducts
+  /v1/accounts/{agency}/{number}/statement:
+    get:
+      operationId: getStatement

@@ -221,12 +221,16 @@ public class SystemGraphTools {
         List<Map<String, Object>> observedCalls = graph.read("""
                 MATCH (a:Service)-[r:OBSERVED_CALLS]->(b:Service)
                 RETURN a.name AS caller, b.name AS target, r.source AS source, r.count AS count,
+                       coalesce(a.indexed, false) AS callerIndexed,
                        EXISTS { (a)-[:DEPENDS_ON]->(b) } AS inCode
                 """, Map.of());
         for (Map<String, Object> row : observedCalls) {
             if (!(Boolean) row.get("inCode")) {
-                issues.add(issue("warning", "runtime", "%s calls %s at runtime (seen by %s) but no call was found in the code of %s"
-                        .formatted(row.get("caller"), row.get("target"), row.get("source"), row.get("caller")), row));
+                issues.add(issue("warning", "runtime", (Boolean) row.get("callerIndexed")
+                        ? "%s calls %s at runtime (seen by %s) but no call was found in the code of %s"
+                                .formatted(row.get("caller"), row.get("target"), row.get("source"), row.get("caller"))
+                        : "%s calls %s at runtime (seen by %s), but %s is not indexed, so its code is unknown to the graph"
+                                .formatted(row.get("caller"), row.get("target"), row.get("source"), row.get("caller")), row));
             }
         }
         if (!observedCalls.isEmpty()) {

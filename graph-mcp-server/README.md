@@ -46,6 +46,8 @@ mvn spring-boot:run
 | `graph.GraphClient` | Acesso ao Neo4j: leitura em sessão READ com timeout e limite de linhas, conversão de tipos |
 | `graph.SchemaComparator` | Comparação de payload produtor x consumidor (com testes) |
 | `graph.GraphQlAnalyzer` | Valida documento GraphQL do cliente contra o schema do servidor e lista os campos usados (com testes) |
+| `web.GraphViewController` | API `/api/map`, `/api/issues`, `/api/services/{name}`, `/api/topics/{name}` e `/api/impact` usada pela interface |
+| `resources/static` | Interface visual em `/`: Cytoscape.js (WebJar), dois canvas para brilho e partículas, sem build de frontend |
 
 ## Configuração
 

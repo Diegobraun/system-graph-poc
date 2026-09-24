@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>System Graph</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="bar glass">
+  <div class="brand">
+    <span class="orb"></span>
+    <strong>System Graph</strong>
+    <span id="stats" class="muted"></span>
+  </div>
+  <form id="impact-form" class="impact" autocomplete="off">
+    <select id="impact-service" aria-label="Serviço dono do contrato"></select>
+    <input id="impact-contract" list="contracts" aria-label="Contrato"
+           placeholder="account-opened, GET /accounts/{id}, QUERY customer, Customer.monthlyIncome">
+    <datalist id="contracts"></datalist>
+    <button type="submit">Impacto</button>
+    <button type="button" id="clear" class="ghost">Limpar</button>
+  </form>
+  <div class="filters">
+    <label class="chip" style="--c: var(--http)"><input type="checkbox" data-filter="http" checked><span>HTTP</span></label>
+    <label class="chip" style="--c: var(--graphql)"><input type="checkbox" data-filter="graphql" checked><span>GraphQL</span></label>
+    <label class="chip" style="--c: var(--kafka)"><input type="checkbox" data-filter="kafka" checked><span>Kafka</span></label>
+    <label class="chip" style="--c: var(--runtime)"><input type="checkbox" data-filter="runtime" checked><span>Runtime</span></label>
+    <button type="button" id="reload" class="ghost" title="Recarregar do Neo4j">Recarregar</button>
+  </div>
+</header>
+<div class="stage">
+  <div id="graph"></div>
+  <div id="empty" class="empty" hidden>
+    <h2>O grafo está vazio</h2>
+    <p class="muted">Rode <code>scripts/refresh-graph.sh</code> ou o <code>crawl</code> e clique em Recarregar.</p>
+  </div>
+</div>
+<div class="legend glass">
+  <span><i class="swatch service"></i>serviço</span>
+  <span><i class="swatch ghost"></i>não indexado</span>
+  <span><i class="swatch topic"></i>tópico</span>
+  <span><i class="line http"></i>HTTP</span>
+  <span><i class="line graphql"></i>GraphQL</span>
+  <span><i class="line kafka"></i>Kafka</span>
+  <span><i class="line runtime"></i>runtime</span>
+  <span><i class="line warning"></i>aviso</span>
+  <span><i class="line issue"></i>erro</span>
+</div>
+<aside class="panel glass">
+  <nav class="tabs">
+    <button type="button" data-tab="details" class="active">Detalhes</button>
+    <button type="button" data-tab="issues">Problemas<span id="issue-count" class="count"></span></button>
+  </nav>
+  <div id="details" class="tab-body"></div>
+  <div id="issues" class="tab-body" hidden></div>
+</aside>
+<script src="webjars/cytoscape/3.32.0/dist/cytoscape.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

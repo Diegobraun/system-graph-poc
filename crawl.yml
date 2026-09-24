@@ -10,6 +10,11 @@ defaults:
 projects:
   - git: https://github.com/Diegobraun/system-graph-account-service.git
   - git: https://github.com/Diegobraun/system-graph-loan-service.git
+  - git: https://github.com/Diegobraun/system-graph-customer-service.git
+  - git: https://github.com/Diegobraun/system-graph-payment-service.git
+  - git: https://github.com/Diegobraun/system-graph-notification-service.git
+  - git: https://github.com/Diegobraun/system-graph-investment-service.git
+  - git: https://github.com/Diegobraun/system-graph-fraud-service.git
 
 kafka:
   bootstrap: localhost:9092

@@ -20,20 +20,25 @@ start() {
   echo "started $name (pid $!, log .run/$name.log)"
 }
 
-while IFS='|' read -r name path _; do
+PORTS=(8090)
+while IFS='|' read -r name path _ port; do
   dir=$(service_dir "$path")
   if [ -d "$dir" ]; then
     start "$name" "$dir"
+    PORTS+=("$port")
   else
     echo "skipping $name: $dir not found (run scripts/clone-services.sh)"
   fi
 done < <(services)
 start graph-mcp-server "$ROOT/graph-mcp-server"
 
-for port in 8081 8082 8090; do
-  for _ in $(seq 1 60); do
+for port in "${PORTS[@]}"; do
+  for _ in $(seq 1 90); do
     nc -z localhost "$port" 2>/dev/null && break
     sleep 1
   done
 done
-echo "account-service :8081  loan-service :8082  graph-mcp-server :8090/mcp"
+while IFS='|' read -r name _ _ port; do
+  printf '%-22s :%s\n' "$name" "$port"
+done < <(services)
+echo "graph-mcp-server       :8090  (UI em http://localhost:8090/, MCP em /mcp)"
