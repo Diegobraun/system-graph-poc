@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(dirname "$0")/lib.sh"
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 EXTRACTOR="$ROOT/extractor/target/graph-extractor.jar"
-SERVICES=(account-service loan-service)
 
 if [ ! -f "$EXTRACTOR" ]; then
   mvn -q -B -f "$ROOT/extractor/pom.xml" package -DskipTests
 fi
 
 GRAPHS=()
-for service in "${SERVICES[@]}"; do
-  mvn -q -B -f "$ROOT/$service/pom.xml" compile
-  java -jar "$EXTRACTOR" extract --project "$ROOT/$service"
-  GRAPHS+=("$ROOT/$service/target/service-graph.json")
-done
+while IFS='|' read -r name path _; do
+  dir=$(service_dir "$path")
+  if [ ! -d "$dir" ]; then
+    echo "skipping $name: $dir not found (run scripts/clone-services.sh)"
+    continue
+  fi
+  mvn -q -B -f "$dir/pom.xml" compile
+  java -jar "$EXTRACTOR" extract --project "$dir"
+  GRAPHS+=("$dir/target/service-graph.json")
+done < <(services)
 
 java -jar "$EXTRACTOR" ingest "${GRAPHS[@]}"
 

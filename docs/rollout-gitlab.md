@@ -85,7 +85,7 @@ adicionada ao MCP server (Spring Security com token ou OAuth via GitLab).
 ### 5. CLAUDE.md ou equivalente
 
 Um trecho padrão em cada repositório dizendo para consultar `impact_of_change` antes de mexer em contrato, como
-o [`CLAUDE.md` do account-service](../account-service/CLAUDE.md). Para Cursor e Copilot, o mesmo texto vai no
+o [`CLAUDE.md` do account-service](https://github.com/Diegobraun/system-graph-account-service/blob/main/CLAUDE.md). Para Cursor e Copilot, o mesmo texto vai no
 arquivo de regras de cada ferramenta.
 
 ## Padronizações que aumentam a precisão

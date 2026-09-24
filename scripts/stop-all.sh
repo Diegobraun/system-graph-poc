@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(dirname "$0")/lib.sh"
 
 for pidfile in "$ROOT"/.run/*.pid; do
   [ -f "$pidfile" ] || continue

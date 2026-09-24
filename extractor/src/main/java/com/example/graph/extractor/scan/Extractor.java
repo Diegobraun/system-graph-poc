@@ -210,9 +210,13 @@ public final class Extractor {
     }
 
     private static String repository(Path projectDir) {
-        String fromCi = System.getenv("CI_PROJECT_URL");
-        if (fromCi != null && !fromCi.isBlank()) {
-            return fromCi;
+        String fromGitLab = System.getenv("CI_PROJECT_URL");
+        if (fromGitLab != null && !fromGitLab.isBlank()) {
+            return fromGitLab;
+        }
+        String githubRepository = System.getenv("GITHUB_REPOSITORY");
+        if (githubRepository != null && !githubRepository.isBlank()) {
+            return System.getenv().getOrDefault("GITHUB_SERVER_URL", "https://github.com") + "/" + githubRepository;
         }
         String remote = git(projectDir, "remote", "get-url", "origin");
         if (remote == null) {
@@ -223,9 +227,11 @@ public final class Extractor {
     }
 
     private static String commitSha(Path projectDir) {
-        String fromCi = System.getenv("CI_COMMIT_SHA");
-        if (fromCi != null && !fromCi.isBlank()) {
-            return fromCi;
+        for (String variable : List.of("CI_COMMIT_SHA", "GITHUB_SHA")) {
+            String fromCi = System.getenv(variable);
+            if (fromCi != null && !fromCi.isBlank()) {
+                return fromCi;
+            }
         }
         String sha = git(projectDir, "rev-parse", "--short", "HEAD");
         return sha == null ? "unknown" : sha;

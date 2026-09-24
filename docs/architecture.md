@@ -128,7 +128,8 @@ extrator do loan-service não tem acesso ao schema do account-service.
 
 ## Repositórios separados
 
-Na empresa, cada serviço tem seu repositório. O desenho parte disso:
+Na empresa, cada serviço tem seu repositório, e esta POC está organizada do mesmo jeito:
+[account-service](https://github.com/Diegobraun/system-graph-account-service), [loan-service](https://github.com/Diegobraun/system-graph-loan-service) e a plataforma. O desenho parte disso:
 
 | Onde | O que roda | O que enxerga |
 |---|---|---|

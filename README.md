@@ -12,31 +12,39 @@ que o `loan-service` quebra, em qual arquivo e em qual linha, sem ninguém ter a
 
 ## Conteúdo
 
+A POC está dividida em três repositórios, como seria na empresa:
+
+| Repositório | O que é |
+|---|---|
+| **system-graph-poc** (este) | Plataforma: extrator, MCP server, templates de CI, scripts e docs |
+| [system-graph-account-service](https://github.com/Diegobraun/system-graph-account-service) | Clientes e contas. REST, GraphQL (Spring for GraphQL), spring-kafka e um client Feign para o loan-service |
+| [system-graph-loan-service](https://github.com/Diegobraun/system-graph-loan-service) | Empréstimos. Spring Cloud Stream e três clients para o account-service: `RestClient`, `@HttpExchange` e GraphQL |
+
+Conteúdo deste repositório:
+
 | Pasta | O que é |
 |---|---|
-| [`account-service`](account-service) | Clientes e contas. REST, GraphQL (Spring for GraphQL), spring-kafka e um client Feign para o loan-service |
-| [`loan-service`](loan-service) | Empréstimos. Spring Cloud Stream e três clients para o account-service: `RestClient`, `@HttpExchange` e GraphQL |
 | [`extractor`](extractor) | CLI Java que lê código compilado, fontes e `application.yml`, gera `service-graph.json` e grava no Neo4j |
 | [`graph-mcp-server`](graph-mcp-server) | MCP server em Spring AI que responde perguntas sobre o grafo |
-| [`ci`](ci) | Template de GitLab CI para rodar a extração em cada repositório |
+| [`ci`](ci) | Template de GitLab CI que cada serviço inclui para rodar a extração |
 | [`scripts`](scripts) | Scripts para subir tudo, atualizar o grafo e rodar a demo |
 | [`docs`](docs) | [Arquitetura e decisões](docs/architecture.md) e [como levar para a empresa](docs/rollout-gitlab.md) |
 
-Os dois serviços ficam no mesmo repositório só por conveniência. Cada um é um projeto Maven independente, com
-`.mcp.json` e `CLAUDE.md` próprios, e representa um repositório separado no GitLab. Nada no extrator depende de
-enxergar outro repositório: cada serviço é extraído sozinho, e o cruzamento acontece no grafo central. Veja
+Cada serviço extrai só o próprio código, no próprio CI: o workflow `system-graph` de cada repositório baixa o
+`graph-extractor.jar` da [release desta plataforma](https://github.com/Diegobraun/system-graph-poc/releases) e
+gera o `service-graph.json` a cada push. O cruzamento entre serviços acontece no grafo central. Veja
 [repositórios separados](docs/architecture.md#repositórios-separados).
 
 ## Arquitetura
 
 ```mermaid
 flowchart LR
-    subgraph repos["Repositórios"]
+    subgraph repos["Repositórios dos serviços"]
         A["account-service<br/>spring-kafka"]
         L["loan-service<br/>Spring Cloud Stream"]
     end
 
-    subgraph pipeline["CI ou scripts/refresh-graph.sh"]
+    subgraph pipeline["CI de cada serviço ou scripts/refresh-graph.sh"]
         X["graph-extractor extract"]
         I["graph-extractor ingest"]
         R["graph-extractor kafka-runtime"]
@@ -104,6 +112,9 @@ Feign. É o tipo de dependência circular que ninguém lembra que existe até al
 Pré-requisitos: Java 21+, Maven 3.9+, Docker.
 
 ```bash
+git clone https://github.com/Diegobraun/system-graph-poc.git
+cd system-graph-poc
+scripts/clone-services.sh   # clona os dois serviços como pastas irmãs (../system-graph-*-service)
 scripts/start-all.sh        # Kafka + Neo4j no Docker, depois account, loan e MCP server
 scripts/refresh-graph.sh    # compila os serviços, extrai, grava no Neo4j e lê os consumer groups
 scripts/demo-flow.sh        # executa o fluxo de negócio com curl
@@ -127,7 +138,7 @@ publica `account-opened` com `accountId, customerId, openedAt`. O `loan-service`
 Nada quebra em runtime. O Jackson preenche `monthlyIncome` com `null`, e a oferta sai com limite zero. É fácil
 ver no passo 3 do `demo-flow.sh`: a cliente tem renda de 8000, o esperado seriam 24000, e chega 0.
 
-O grafo pega isso comparando as classes de payload dos dois lados, mesmo cada serviço estando no seu repositório:
+O grafo pega isso comparando as classes de payload dos dois lados, cada uma num repositório:
 
 ```bash
 scripts/mcp-call.sh find_contract_issues
@@ -144,9 +155,9 @@ scripts/mcp-call.sh find_contract_issues
 ### GraphQL: validação do documento contra o schema de outro repositório
 
 O loan-service consulta o account-service por GraphQL com o documento
-[`customerProfile.graphql`](loan-service/src/main/resources/graphql-documents/customerProfile.graphql). O grafo
+[`customerProfile.graphql`](https://github.com/Diegobraun/system-graph-loan-service/blob/main/src/main/resources/graphql-documents/customerProfile.graphql). O grafo
 guarda o schema do servidor e o documento do cliente, e o MCP server valida um contra o outro. Para ver
-funcionando, remova `monthlyIncome` do [`schema.graphqls`](account-service/src/main/resources/graphql/schema.graphqls),
+funcionando, remova `monthlyIncome` do [`schema.graphqls`](https://github.com/Diegobraun/system-graph-account-service/blob/main/src/main/resources/graphql/schema.graphqls),
 rode `scripts/refresh-graph.sh` e depois `scripts/mcp-call.sh find_contract_issues`:
 
 ```text
@@ -162,11 +173,11 @@ scripts/mcp-call.sh impact_of_change '{"service":"account-service","contract":"C
 
 ## Usando com Claude Code
 
-Cada serviço tem um `.mcp.json` apontando para o MCP server e um `CLAUDE.md` pedindo para consultar o grafo antes
-de mexer em contratos. Com tudo rodando:
+Cada repositório de serviço tem um `.mcp.json` apontando para o MCP server e um `CLAUDE.md` pedindo para
+consultar o grafo antes de mexer em contratos. Com tudo rodando:
 
 ```bash
-cd account-service
+cd ../system-graph-account-service
 claude
 ```
 
@@ -188,8 +199,9 @@ arquivo?"*:
 >
 > Os dois serviços dependem um do outro, então cada mudança exige alterar os dois lados.
 
-O assistente estava aberto só no account-service e mesmo assim apontou arquivos do loan-service. Com os
-serviços em repositórios separados, a resposta traz o `repository` de cada serviço afetado.
+O assistente estava aberto só no account-service e mesmo assim apontou arquivos do loan-service, que ele não
+enxerga. A resposta de cada tool traz o `repository` e o `commitSha` de cada serviço afetado, para abrir o
+arquivo no repositório certo.
 
 Outros clientes MCP (Cursor, VS Code com Copilot, Claude Desktop) usam a mesma URL `http://localhost:8090/mcp`.
 
