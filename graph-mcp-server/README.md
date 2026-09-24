@@ -3,6 +3,10 @@
 MCP server em **Spring AI 1.1** que expõe o grafo para assistentes de IA. Transporte Streamable HTTP em
 `http://localhost:8090/mcp`.
 
+![Mapa dos serviços na interface do system-graph](../docs/img/ui-map.jpg)
+
+*A [interface visual](../README.md#interface-visual) servida por este módulo em `http://localhost:8090`.*
+
 ```bash
 mvn spring-boot:run
 ```

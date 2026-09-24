@@ -3,6 +3,10 @@
 CLI que transforma um serviço Spring Boot num `service-graph.json` e grava esse JSON no Neo4j. Não sobe a
 aplicação e não precisa de nada além do projeto compilado.
 
+![Mapa dos serviços na interface do system-graph](../docs/img/ui-map.jpg)
+
+*O grafo que o extrator gera, na [interface visual](../README.md#interface-visual).*
+
 ```bash
 mvn package
 java -jar target/graph-extractor.jar <comando>
