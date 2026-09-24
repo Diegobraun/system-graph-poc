@@ -35,7 +35,7 @@ public record Manifest(String service, List<HttpCall> calls, List<Publication> p
         String location = FILE_NAME;
         List<HttpCall> calls = new ArrayList<>();
         for (Map<String, Object> item : items(root, "calls")) {
-            calls.add(new HttpCall(text(item, "service"), upper(text(item, "method")), text(item, "path"), null, "manifest", "declared", location));
+            calls.add(new HttpCall(text(item, "service"), upper(text(item, "method")), text(item, "path"), null, "manifest", "manifest", "declared", location, null));
         }
         List<Publication> publishes = new ArrayList<>();
         for (Map<String, Object> item : items(root, "publishes")) {

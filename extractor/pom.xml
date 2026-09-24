@@ -18,7 +18,10 @@
         <neo4j-driver.version>5.28.15</neo4j-driver.version>
         <kafka-clients.version>3.9.1</kafka-clients.version>
         <slf4j.version>2.0.17</slf4j.version>
+        <graphql-java.version>24.3</graphql-java.version>
         <junit.version>5.14.4</junit.version>
+        <spring.version>6.2.19</spring.version>
+        <spring-cloud-openfeign.version>4.3.3</spring-cloud-openfeign.version>
     </properties>
 
     <dependencies>
@@ -31,6 +34,11 @@
             <groupId>com.github.javaparser</groupId>
             <artifactId>javaparser-symbol-solver-core</artifactId>
             <version>${javaparser.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.graphql-java</groupId>
+            <artifactId>graphql-java</artifactId>
+            <version>${graphql-java.version}</version>
         </dependency>
         <dependency>
             <groupId>org.yaml</groupId>
@@ -61,6 +69,30 @@
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-nop</artifactId>
             <version>${slf4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-web</artifactId>
+            <version>${spring.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+            <version>${spring.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.graphql</groupId>
+            <artifactId>spring-graphql</artifactId>
+            <version>1.4.6</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-openfeign-core</artifactId>
+            <version>${spring-cloud-openfeign.version}</version>
+            <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>

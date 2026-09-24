@@ -1,0 +1,11 @@
+query customerProfile($id: ID!) {
+    customer(id: $id) {
+        name
+        monthlyIncome
+        accounts {
+            id
+            balance
+            status
+        }
+    }
+}

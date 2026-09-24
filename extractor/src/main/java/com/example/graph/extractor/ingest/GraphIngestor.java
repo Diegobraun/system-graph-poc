@@ -59,13 +59,21 @@ public final class GraphIngestor implements AutoCloseable {
     }
 
     private void upsertService(TransactionContext tx, ServiceGraph graph) {
+        Map<String, Object> parameters = new HashMap<>();
+        parameters.put("service", graph.service());
+        parameters.put("repository", graph.repository());
+        parameters.put("graphqlSchema", graph.graphqlSchema());
+        parameters.put("commitSha", graph.commitSha());
+        parameters.put("extractedAt", graph.extractedAt());
         tx.run("""
                 MERGE (s:Service {name: $service})
-                SET s.commitSha = $commitSha,
+                SET s.repository = $repository,
+                    s.graphqlSchema = $graphqlSchema,
+                    s.commitSha = $commitSha,
                     s.extractedAt = $extractedAt,
                     s.ingestedAt = datetime(),
                     s.indexed = true
-                """, Map.of("service", graph.service(), "commitSha", graph.commitSha(), "extractedAt", graph.extractedAt()));
+                """, parameters);
     }
 
     private void exposes(TransactionContext tx, ServiceGraph graph) {
@@ -75,13 +83,14 @@ public final class GraphIngestor implements AutoCloseable {
                     "key", EndpointKey.of(graph.service(), endpoint.method(), endpoint.path()),
                     "method", endpoint.method(),
                     "path", endpoint.path(),
-                    "handler", endpoint.handler()));
+                    "handler", endpoint.handler(),
+                    "protocol", protocol(endpoint.method())));
         }
         tx.run("""
                 MATCH (s:Service {name: $service})
                 UNWIND $rows AS row
                 MERGE (e:Endpoint {key: row.key})
-                SET e.service = $service, e.method = row.method, e.path = row.path
+                SET e.service = $service, e.method = row.method, e.path = row.path, e.protocol = row.protocol
                 MERGE (s)-[r:EXPOSES]->(e)
                 SET r.handler = row.handler
                 """, Map.of("service", graph.service(), "rows", rows));
@@ -102,6 +111,9 @@ public final class GraphIngestor implements AutoCloseable {
             row.put("confidence", call.confidence());
             row.put("location", call.location());
             row.put("baseUrl", call.baseUrl());
+            row.put("via", call.via());
+            row.put("document", call.document());
+            row.put("protocol", protocol(call.method()));
             rows.add(row);
         }
         tx.run("""
@@ -114,12 +126,14 @@ public final class GraphIngestor implements AutoCloseable {
                 WITH s, row
                 WHERE row.key IS NOT NULL
                 MERGE (e:Endpoint {key: row.key})
-                ON CREATE SET e.service = row.target, e.method = row.method, e.path = row.path
+                ON CREATE SET e.service = row.target, e.method = row.method, e.path = row.path, e.protocol = row.protocol
                 MERGE (s)-[c:CALLS]->(e)
                 SET c.source = row.source,
                     c.confidence = row.confidence,
                     c.location = row.location,
-                    c.baseUrl = row.baseUrl
+                    c.baseUrl = row.baseUrl,
+                    c.via = row.via,
+                    c.document = row.document
                 """, Map.of("service", graph.service(), "rows", rows));
     }
 
@@ -208,6 +222,13 @@ public final class GraphIngestor implements AutoCloseable {
                 "className", schema.className(),
                 "fieldNames", schema.fields().stream().map(SchemaField::name).toList(),
                 "fieldTypes", schema.fields().stream().map(SchemaField::type).toList()));
+    }
+
+    private static String protocol(String method) {
+        return switch (method) {
+            case "QUERY", "MUTATION", "SUBSCRIPTION", "GRAPHQL" -> "graphql";
+            default -> "http";
+        };
     }
 
     private void removeOrphans(TransactionContext tx) {

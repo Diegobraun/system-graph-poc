@@ -1,5 +1,6 @@
 package com.example.loan.loan;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -17,5 +18,9 @@ public class LoanRepository {
 
     public Optional<Loan> findById(String id) {
         return Optional.ofNullable(loans.get(id));
+    }
+
+    public List<Loan> findByAccount(Long accountId) {
+        return loans.values().stream().filter(loan -> loan.accountId().equals(accountId)).toList();
     }
 }

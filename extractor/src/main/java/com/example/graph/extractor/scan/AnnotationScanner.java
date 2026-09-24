@@ -36,6 +36,24 @@ public final class AnnotationScanner {
             WEB + "DeleteMapping", "DELETE",
             WEB + "PatchMapping", "PATCH",
             WEB + "RequestMapping", "ANY");
+    private static final String EXCHANGE = "org.springframework.web.service.annotation.";
+    private static final Map<String, String> EXCHANGES = Map.of(
+            EXCHANGE + "GetExchange", "GET",
+            EXCHANGE + "PostExchange", "POST",
+            EXCHANGE + "PutExchange", "PUT",
+            EXCHANGE + "DeleteExchange", "DELETE",
+            EXCHANGE + "PatchExchange", "PATCH",
+            EXCHANGE + "HttpExchange", "ANY");
+    private static final String GRAPHQL = "org.springframework.graphql.data.method.annotation.";
+    private static final Map<String, String> GRAPHQL_MAPPINGS = Map.of(
+            GRAPHQL + "QueryMapping", "QUERY",
+            GRAPHQL + "MutationMapping", "MUTATION",
+            GRAPHQL + "SubscriptionMapping", "SUBSCRIPTION");
+    private static final Map<String, String> GRAPHQL_ROOT_TYPES = Map.of(
+            "Query", "QUERY",
+            "Mutation", "MUTATION",
+            "Subscription", "SUBSCRIPTION");
+    private static final String FEIGN_CLIENT = "org.springframework.cloud.openfeign.FeignClient";
     private static final String KAFKA_LISTENER = "org.springframework.kafka.annotation.KafkaListener";
     private static final String BEAN = "org.springframework.context.annotation.Bean";
     private static final Set<String> WRAPPER_TYPES = Set.of(
@@ -53,11 +71,22 @@ public final class AnnotationScanner {
     public record FunctionBean(String name, String kind, String inputType, String outputType, String location) {
     }
 
+    private record Mapping(String httpMethod, String path) {
+    }
+
+    public record ClientMethod(String httpMethod, String path, String methodName) {
+    }
+
+    public record DeclarativeClient(String interfaceName, String kind, String serviceName, String url, List<ClientMethod> methods) {
+    }
+
     public record Result(
             ClassIndex classIndex,
             List<ExposedEndpoint> exposes,
             List<Subscription> kafkaListeners,
-            Map<String, FunctionBean> functionBeans) {
+            Map<String, FunctionBean> functionBeans,
+            List<DeclarativeClient> declarativeClients,
+            Map<String, String> graphqlHandlers) {
     }
 
     private final SpringProperties properties;
@@ -71,6 +100,8 @@ public final class AnnotationScanner {
         List<ExposedEndpoint> exposes = new ArrayList<>();
         List<Subscription> listeners = new ArrayList<>();
         Map<String, FunctionBean> functions = new LinkedHashMap<>();
+        List<DeclarativeClient> clients = new ArrayList<>();
+        Map<String, String> graphqlHandlers = new LinkedHashMap<>();
 
         try (ScanResult scan = new ClassGraph()
                 .overrideClasspath(classesDir.toString())
@@ -81,18 +112,22 @@ public final class AnnotationScanner {
                 if (type.hasAnnotation(WEB + "RestController") || type.hasAnnotation("org.springframework.stereotype.Controller")) {
                     exposes.addAll(endpointsOf(type));
                 }
+                if (type.isInterface()) {
+                    declarativeClient(type).ifPresent(clients::add);
+                }
                 for (MethodInfo method : type.getDeclaredMethodInfo()) {
                     AnnotationInfo listener = method.getAnnotationInfo(KAFKA_LISTENER);
                     if (listener != null) {
                         listeners.addAll(subscriptionsOf(type, method, listener));
                     }
+                    graphqlOperation(method).ifPresent(operation -> graphqlHandlers.putIfAbsent(operation, handler(type, method)));
                     if (method.hasAnnotation(BEAN)) {
                         functionBean(type, method).ifPresent(bean -> functions.put(bean.name(), bean));
                     }
                 }
             }
         }
-        return new Result(index, exposes, listeners, functions);
+        return new Result(index, exposes, listeners, functions, clients, graphqlHandlers);
     }
 
     private List<SchemaField> fieldsOf(ClassInfo type) {
@@ -116,32 +151,97 @@ public final class AnnotationScanner {
         }
         List<ExposedEndpoint> endpoints = new ArrayList<>();
         for (MethodInfo method : type.getDeclaredMethodInfo()) {
-            for (Map.Entry<String, String> mapping : MAPPINGS.entrySet()) {
-                AnnotationInfo annotation = method.getAnnotationInfo(mapping.getKey());
-                if (annotation == null) {
-                    continue;
-                }
-                List<String> httpMethods = List.of(mapping.getValue());
-                if ("ANY".equals(mapping.getValue())) {
-                    List<String> declared = strings(annotation, "method");
-                    if (!declared.isEmpty()) {
-                        httpMethods = declared;
-                    }
-                }
-                List<String> paths = strings(annotation, "value", "path");
-                if (paths.isEmpty()) {
-                    paths = List.of("");
-                }
+            for (Mapping mapping : mappingsOf(method, MAPPINGS, List.of("value", "path"))) {
                 for (String base : basePaths) {
-                    for (String path : paths) {
-                        for (String httpMethod : httpMethods) {
-                            endpoints.add(new ExposedEndpoint(httpMethod, joinPath(base, path), handler(type, method)));
-                        }
-                    }
+                    endpoints.add(new ExposedEndpoint(mapping.httpMethod(), joinPath(base, mapping.path()), handler(type, method)));
                 }
             }
         }
         return endpoints;
+    }
+
+    private Optional<DeclarativeClient> declarativeClient(ClassInfo type) {
+        AnnotationInfo feign = type.getAnnotationInfo(FEIGN_CLIENT);
+        if (feign != null) {
+            String name = strings(feign, "name", "value").stream().findFirst().map(properties::resolve).orElse(null);
+            String url = strings(feign, "url").stream().findFirst().orElse(null);
+            String basePath = strings(feign, "path").stream().findFirst().orElse("");
+            List<ClientMethod> methods = new ArrayList<>();
+            for (MethodInfo method : type.getDeclaredMethodInfo()) {
+                for (Mapping mapping : mappingsOf(method, MAPPINGS, List.of("value", "path"))) {
+                    methods.add(new ClientMethod(mapping.httpMethod(), joinPath(basePath, mapping.path()), method.getName()));
+                }
+            }
+            return Optional.of(new DeclarativeClient(type.getName(), "feign", name, url, methods));
+        }
+
+        List<ClientMethod> methods = new ArrayList<>();
+        AnnotationInfo typeExchange = type.getAnnotationInfo(EXCHANGE + "HttpExchange");
+        String url = null;
+        String basePath = "";
+        if (typeExchange != null) {
+            String value = strings(typeExchange, "url", "value").stream().findFirst().orElse("");
+            if (properties.resolve(value).contains("://")) {
+                url = value;
+            } else {
+                basePath = value;
+            }
+        }
+        for (MethodInfo method : type.getDeclaredMethodInfo()) {
+            for (Mapping mapping : mappingsOf(method, EXCHANGES, List.of("url", "value"))) {
+                methods.add(new ClientMethod(mapping.httpMethod(), joinPath(basePath, mapping.path()), method.getName()));
+            }
+        }
+        if (typeExchange == null && methods.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(new DeclarativeClient(type.getName(), "http-exchange", null, url, methods));
+    }
+
+    private Optional<String> graphqlOperation(MethodInfo method) {
+        for (Map.Entry<String, String> mapping : GRAPHQL_MAPPINGS.entrySet()) {
+            AnnotationInfo annotation = method.getAnnotationInfo(mapping.getKey());
+            if (annotation != null) {
+                String field = strings(annotation, "name", "value").stream().findFirst().orElse(method.getName());
+                return Optional.of(mapping.getValue() + " " + field);
+            }
+        }
+        AnnotationInfo schemaMapping = method.getAnnotationInfo(GRAPHQL + "SchemaMapping");
+        if (schemaMapping != null) {
+            String operation = strings(schemaMapping, "typeName").stream().findFirst().map(GRAPHQL_ROOT_TYPES::get).orElse(null);
+            if (operation != null) {
+                String field = strings(schemaMapping, "field", "value").stream().findFirst().orElse(method.getName());
+                return Optional.of(operation + " " + field);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private List<Mapping> mappingsOf(MethodInfo method, Map<String, String> annotations, List<String> pathAttributes) {
+        List<Mapping> result = new ArrayList<>();
+        for (Map.Entry<String, String> mapping : annotations.entrySet()) {
+            AnnotationInfo annotation = method.getAnnotationInfo(mapping.getKey());
+            if (annotation == null) {
+                continue;
+            }
+            List<String> httpMethods = List.of(mapping.getValue());
+            if ("ANY".equals(mapping.getValue())) {
+                List<String> declared = strings(annotation, "method");
+                if (!declared.isEmpty()) {
+                    httpMethods = declared.stream().map(String::toUpperCase).toList();
+                }
+            }
+            List<String> paths = strings(annotation, pathAttributes.toArray(String[]::new));
+            if (paths.isEmpty()) {
+                paths = List.of("");
+            }
+            for (String path : paths) {
+                for (String httpMethod : httpMethods) {
+                    result.add(new Mapping(httpMethod, path));
+                }
+            }
+        }
+        return result;
     }
 
     private List<Subscription> subscriptionsOf(ClassInfo type, MethodInfo method, AnnotationInfo listener) {

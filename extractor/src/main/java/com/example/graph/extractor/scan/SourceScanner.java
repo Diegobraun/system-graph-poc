@@ -40,11 +40,17 @@ public final class SourceScanner {
 
     private static final Set<String> HTTP_VERBS = Set.of("get", "post", "put", "delete", "patch", "head", "options");
     private static final Set<String> HTTP_CLIENT_TYPES = Set.of("RestClient", "WebClient");
+    private static final Set<String> GRAPHQL_CLIENT_TYPES = Set.of(
+            "HttpSyncGraphQlClient", "HttpGraphQlClient", "GraphQlClient", "WebSocketGraphQlClient", "RSocketGraphQlClient");
+    private static final Set<String> CLIENT_ADAPTERS = Set.of("RestClientAdapter", "WebClientAdapter", "RestTemplateAdapter");
 
-    public record ClientCall(String clientField, String method, String path, BaseUrl baseUrl, String location) {
+    public record ClientCall(String clientField, String via, String method, String path, BaseUrl baseUrl, String location) {
     }
 
     public record BaseUrl(String raw, String resolved, String propertyKey) {
+    }
+
+    public record GraphQlClientCall(String documentText, String documentName, BaseUrl baseUrl, String location) {
     }
 
     public record TemplateSend(String topic, String payloadType, String location) {
@@ -53,7 +59,17 @@ public final class SourceScanner {
     public record BridgeSend(String binding, String payloadType, String location) {
     }
 
-    public record Result(List<ClientCall> httpCalls, List<TemplateSend> kafkaSends, List<BridgeSend> bridgeSends) {
+    public record Result(
+            List<ClientCall> httpCalls,
+            List<TemplateSend> kafkaSends,
+            List<BridgeSend> bridgeSends,
+            List<GraphQlClientCall> graphQlCalls,
+            Map<String, BaseUrl> proxyBaseUrls,
+            Map<String, String> methodLocations) {
+
+        public String locate(String className, String method) {
+            return methodLocations.getOrDefault(className.replace('$', '.') + "#" + method, className + "#" + method);
+        }
     }
 
     private record Unit(CompilationUnit cu, Path file) {
@@ -74,7 +90,7 @@ public final class SourceScanner {
     public Result scan() throws IOException {
         Path sources = projectDir.resolve("src/main/java");
         if (!Files.isDirectory(sources)) {
-            return new Result(List.of(), List.of(), List.of());
+            return new Result(List.of(), List.of(), List.of(), List.of(), Map.of(), Map.of());
         }
         JavaParser parser = new JavaParser(new ParserConfiguration()
                 .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21)
@@ -90,10 +106,16 @@ public final class SourceScanner {
         List<ClientCall> httpCalls = new ArrayList<>();
         List<TemplateSend> kafkaSends = new ArrayList<>();
         List<BridgeSend> bridgeSends = new ArrayList<>();
+        List<GraphQlClientCall> graphQlCalls = new ArrayList<>();
+        Map<String, BaseUrl> proxyBaseUrls = new HashMap<>();
+        Map<String, String> methodLocations = new HashMap<>();
         for (Unit unit : units) {
+            indexMethodLocations(unit, methodLocations);
             for (MethodCallExpr call : unit.cu().findAll(MethodCallExpr.class)) {
                 switch (call.getNameAsString()) {
                     case "uri" -> httpCall(unit, call).ifPresent(httpCalls::add);
+                    case "document", "documentName" -> graphQlCall(unit, call).ifPresent(graphQlCalls::add);
+                    case "createClient" -> proxyClient(unit, call).ifPresent(p -> proxyBaseUrls.put(p.getKey(), p.getValue()));
                     case "send" -> {
                         Optional<String> fieldType = rootField(call.getScope().orElse(null)).flatMap(f -> fieldType(call, f)).map(this::rawName);
                         if (fieldType.filter(t -> t.equals("KafkaTemplate") || t.equals("KafkaOperations")).isPresent()) {
@@ -107,7 +129,7 @@ public final class SourceScanner {
                 }
             }
         }
-        return new Result(httpCalls, kafkaSends, bridgeSends);
+        return new Result(httpCalls, kafkaSends, bridgeSends, graphQlCalls, proxyBaseUrls, methodLocations);
     }
 
     private void indexConstants(CompilationUnit cu) {
@@ -144,7 +166,8 @@ public final class SourceScanner {
             return Optional.empty();
         }
         Optional<String> clientField = rootField(verbCall.getScope().orElse(null));
-        if (clientField.isEmpty() || fieldType(uriCall, clientField.get()).map(this::rawName).filter(HTTP_CLIENT_TYPES::contains).isEmpty()) {
+        Optional<String> clientType = clientField.flatMap(f -> fieldType(uriCall, f)).map(this::rawName).filter(HTTP_CLIENT_TYPES::contains);
+        if (clientType.isEmpty()) {
             return Optional.empty();
         }
         String path = null;
@@ -161,7 +184,65 @@ public final class SourceScanner {
             }
         }
         BaseUrl baseUrl = baseUrlFor(uriCall, clientField.get()).orElse(null);
-        return Optional.of(new ClientCall(clientField.get(), httpMethod, path, baseUrl, location(unit, uriCall)));
+        String via = clientType.get().equals("WebClient") ? "web-client" : "rest-client";
+        return Optional.of(new ClientCall(clientField.get(), via, httpMethod, path, baseUrl, location(unit, uriCall)));
+    }
+
+    private Optional<GraphQlClientCall> graphQlCall(Unit unit, MethodCallExpr call) {
+        Optional<String> field = rootField(call.getScope().orElse(null));
+        if (field.isEmpty() || call.getArguments().size() != 1
+                || fieldType(call, field.get()).map(this::rawName).filter(GRAPHQL_CLIENT_TYPES::contains).isEmpty()) {
+            return Optional.empty();
+        }
+        String value = rawValue(call.getArgument(0)).orElse(null);
+        boolean named = call.getNameAsString().equals("documentName");
+        BaseUrl baseUrl = graphQlBaseUrl(call, field.get()).orElse(null);
+        return Optional.of(new GraphQlClientCall(named ? null : value, named ? value : null, baseUrl, location(unit, call)));
+    }
+
+    private Optional<BaseUrl> graphQlBaseUrl(Node context, String field) {
+        Optional<TypeDeclaration> owner = context.findAncestor(TypeDeclaration.class);
+        if (owner.isEmpty()) {
+            return Optional.empty();
+        }
+        List<Expression> values = new ArrayList<>();
+        for (AssignExpr assign : owner.get().findAll(AssignExpr.class)) {
+            if (rootField(assign.getTarget()).filter(field::equals).isPresent()) {
+                values.add(assign.getValue());
+            }
+        }
+        ((TypeDeclaration<?>) owner.get()).getFieldByName(field)
+                .flatMap(declaration -> declaration.getVariables().stream().filter(v -> v.getNameAsString().equals(field)).findFirst())
+                .flatMap(VariableDeclarator::getInitializer)
+                .ifPresent(values::add);
+        for (Expression value : values) {
+            for (MethodCallExpr call : value.findAll(MethodCallExpr.class)) {
+                if (call.getNameAsString().equals("url") && call.getArguments().size() == 1) {
+                    Optional<String> raw = rawValue(call.getArgument(0));
+                    if (raw.isPresent() && properties.resolve(raw.get()).contains("://")) {
+                        return Optional.of(new BaseUrl(raw.get(), properties.resolve(raw.get()), SpringProperties.placeholderKey(raw.get()).orElse(null)));
+                    }
+                }
+            }
+            Optional<BaseUrl> inner = baseUrlIn(value);
+            if (inner.isPresent()) {
+                return inner;
+            }
+            for (MethodCallExpr call : value.findAll(MethodCallExpr.class)) {
+                boolean factory = (call.getNameAsString().equals("builder") || call.getNameAsString().equals("create"))
+                        && call.getScope().map(scope -> GRAPHQL_CLIENT_TYPES.contains(scope.toString())).orElse(false);
+                if (factory && call.getArguments().size() == 1) {
+                    Optional<CallableDeclaration> callable = call.findAncestor(CallableDeclaration.class);
+                    Optional<BaseUrl> fromClient = callable.isPresent()
+                            ? clientBaseUrl(call.getArgument(0), (CallableDeclaration<?>) callable.get())
+                            : rootField(call.getArgument(0)).flatMap(name -> baseUrlFor(call, name));
+                    if (fromClient.isPresent()) {
+                        return fromClient;
+                    }
+                }
+            }
+        }
+        return Optional.empty();
     }
 
     private Optional<TemplateSend> kafkaSend(Unit unit, MethodCallExpr call) {
@@ -215,10 +296,14 @@ public final class SourceScanner {
                 }
             }
         }
+        return baseUrlOfBean(field);
+    }
+
+    private Optional<BaseUrl> baseUrlOfBean(String beanName) {
         for (Unit unit : units) {
             for (MethodDeclaration method : unit.cu().findAll(MethodDeclaration.class)) {
                 if (method.isAnnotationPresent("Bean")
-                        && method.getNameAsString().equals(field)
+                        && method.getNameAsString().equals(beanName)
                         && HTTP_CLIENT_TYPES.contains(rawName(method.getType().asString()))) {
                     Optional<BaseUrl> found = baseUrlIn(method);
                     if (found.isPresent()) {
@@ -228,6 +313,53 @@ public final class SourceScanner {
             }
         }
         return Optional.empty();
+    }
+
+    private Optional<Map.Entry<String, BaseUrl>> proxyClient(Unit unit, MethodCallExpr call) {
+        if (call.getArguments().size() != 1 || !call.getArgument(0).isClassExpr()) {
+            return Optional.empty();
+        }
+        String clientInterface = qualify(unit, call.getArgument(0).asClassExpr().getType().asString());
+        Optional<CallableDeclaration> callable = call.findAncestor(CallableDeclaration.class);
+        if (callable.isEmpty()) {
+            return Optional.empty();
+        }
+        Node body = (Node) callable.get();
+        Optional<BaseUrl> baseUrl = baseUrlIn(body);
+        if (baseUrl.isEmpty()) {
+            baseUrl = body.findAll(MethodCallExpr.class).stream()
+                    .filter(m -> m.getNameAsString().equals("create")
+                            && m.getScope().map(scope -> CLIENT_ADAPTERS.contains(scope.toString())).orElse(false)
+                            && m.getArguments().size() == 1)
+                    .findFirst()
+                    .flatMap(adapter -> clientBaseUrl(adapter.getArgument(0), (CallableDeclaration<?>) callable.get()));
+        }
+        return baseUrl.map(url -> Map.entry(clientInterface, url));
+    }
+
+    private Optional<BaseUrl> clientBaseUrl(Expression client, CallableDeclaration<?> callable) {
+        Optional<String> name = rootField(client);
+        if (name.isEmpty()) {
+            return Optional.empty();
+        }
+        Optional<Parameter> parameter = callable.getParameterByName(name.get());
+        if (parameter.isPresent()) {
+            String bean = parameter.get().getAnnotationByName("Qualifier").flatMap(this::annotationValue).orElse(name.get());
+            return baseUrlOfBean(bean);
+        }
+        return baseUrlFor(client, name.get());
+    }
+
+    private void indexMethodLocations(Unit unit, Map<String, String> locations) {
+        for (TypeDeclaration<?> type : unit.cu().findAll(TypeDeclaration.class)) {
+            Optional<String> name = type.getFullyQualifiedName();
+            if (name.isEmpty()) {
+                continue;
+            }
+            for (MethodDeclaration method : type.getMethods()) {
+                locations.putIfAbsent(name.get() + "#" + method.getNameAsString(), location(unit, method));
+            }
+        }
     }
 
     private Optional<BaseUrl> baseUrlIn(Node node) {

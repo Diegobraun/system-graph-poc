@@ -1,0 +1,7 @@
+spring:
+  application:
+    name: graphql-fixture
+
+services:
+  ledger:
+    url: http://ledger-service:8080

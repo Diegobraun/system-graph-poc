@@ -1,5 +1,6 @@
 package com.example.account.account;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,5 +24,9 @@ public class AccountRepository {
 
     public Optional<Account> findById(Long id) {
         return Optional.ofNullable(accounts.get(id));
+    }
+
+    public List<Account> findByCustomer(Long customerId) {
+        return accounts.values().stream().filter(account -> account.customerId().equals(customerId)).toList();
     }
 }

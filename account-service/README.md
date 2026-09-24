@@ -1,7 +1,7 @@
 # account-service
 
-Serviço de clientes e contas. Usa **spring-kafka** direto (`KafkaTemplate` e `@KafkaListener`), o estilo mais
-comum em serviços Spring Boot.
+Serviço de clientes e contas. Usa **spring-kafka** direto (`KafkaTemplate` e `@KafkaListener`), expõe REST e
+**GraphQL** (Spring for GraphQL) e chama o loan-service com **OpenFeign**.
 
 ## Contratos
 
@@ -11,8 +11,13 @@ comum em serviços Spring Boot.
 | REST exposto | `GET /customers/{id}` | chamado pelo loan-service |
 | REST exposto | `POST /accounts` | abre conta para um cliente e publica `account-opened` |
 | REST exposto | `GET /accounts/{id}` | chamado pelo loan-service |
+| REST exposto | `GET /accounts/{id}/summary` | saldo e empréstimos da conta, busca os empréstimos no loan-service |
+| GraphQL exposto | `query customer(id)` / `query account(id)` | schema em [`schema.graphqls`](src/main/resources/graphql/schema.graphqls); `Customer.accounts` resolvido por `@SchemaMapping` |
+| REST chamado | `GET /loans?accountId=` no loan-service | `LoanClient`, `@FeignClient(name = "loan-service")` |
 | Kafka publica | `account-opened` | `AccountOpenedEvent(accountId, customerId, openedAt)` via `KafkaTemplate` |
 | Kafka consome | `loan-disbursed` | `LoanDisbursedEvent`, credita o valor na conta (idempotente por `loanId`) |
+
+GraphQL fica em `http://localhost:8081/graphql`.
 
 O tópico publicado vem de uma constante (`Topics.ACCOUNT_OPENED`) e o consumido de uma propriedade
 (`${app.topics.loan-disbursed}`). Os dois casos são de propósito, para exercitar o extrator.

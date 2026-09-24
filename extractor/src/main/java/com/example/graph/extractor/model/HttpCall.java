@@ -5,7 +5,9 @@ public record HttpCall(
         String method,
         String path,
         String baseUrl,
+        String via,
         String source,
         String confidence,
-        String location) {
+        String location,
+        String document) {
 }

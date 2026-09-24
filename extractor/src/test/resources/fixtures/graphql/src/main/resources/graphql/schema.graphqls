@@ -1,0 +1,12 @@
+type Query {
+    rates: [Rate]
+}
+
+type Mutation {
+    transfer(amount: Float!): Boolean
+}
+
+type Rate {
+    code: String
+    value: Float
+}

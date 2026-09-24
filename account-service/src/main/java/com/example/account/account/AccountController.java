@@ -33,4 +33,9 @@ public class AccountController {
     public ResponseEntity<Account> get(@PathVariable Long id) {
         return ResponseEntity.of(repository.findById(id));
     }
+
+    @GetMapping("/{id}/summary")
+    public ResponseEntity<AccountSummary> summary(@PathVariable Long id) {
+        return ResponseEntity.of(service.summary(id));
+    }
 }

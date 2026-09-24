@@ -1,0 +1,20 @@
+type Query {
+    customer(id: ID!): Customer
+    account(id: ID!): Account
+}
+
+type Customer {
+    id: ID!
+    name: String!
+    document: String!
+    monthlyIncome: Float!
+    accounts: [Account!]!
+}
+
+type Account {
+    id: ID!
+    customerId: ID!
+    balance: Float!
+    status: String!
+    openedAt: String!
+}

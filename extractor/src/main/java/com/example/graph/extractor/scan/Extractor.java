@@ -1,5 +1,6 @@
 package com.example.graph.extractor.scan;
 
+import com.example.graph.extractor.model.ExposedEndpoint;
 import com.example.graph.extractor.model.HttpCall;
 import com.example.graph.extractor.model.PayloadSchema;
 import com.example.graph.extractor.model.Publication;
@@ -27,7 +28,8 @@ public final class Extractor {
         if (!Files.isDirectory(classes)) {
             throw new IllegalStateException("Compiled classes not found at " + classes + ". Run mvn compile first.");
         }
-        SpringProperties properties = SpringProperties.load(projectDir.resolve("src/main/resources"));
+        Path resources = projectDir.resolve("src/main/resources");
+        SpringProperties properties = SpringProperties.load(resources);
         Manifest manifest = Manifest.load(projectDir);
         String service = properties.get("spring.application.name")
                 .or(() -> Optional.ofNullable(manifest.service()))
@@ -36,12 +38,24 @@ public final class Extractor {
         AnnotationScanner.Result annotations = new AnnotationScanner(properties).scan(classes);
         SourceScanner.Result sources = new SourceScanner(projectDir, properties, annotations.classIndex()).scan();
 
+        Optional<GraphQlScanner.Schema> graphqlSchema = GraphQlScanner.loadSchema(resources);
+        List<ExposedEndpoint> exposes = new ArrayList<>(annotations.exposes());
+        graphqlSchema.ifPresent(schema -> schema.operations().forEach(operation -> exposes.add(new ExposedEndpoint(
+                operation.type(), operation.field(),
+                annotations.graphqlHandlers().getOrDefault(operation.type() + " " + operation.field(), "graphql schema")))));
+
         List<HttpCall> calls = new ArrayList<>(httpCalls(sources));
+        calls.addAll(declarativeCalls(properties, annotations, sources));
+        calls.addAll(graphQlCalls(resources, sources));
         calls.addAll(manifest.calls());
 
-        List<Subscription> consumes = new ArrayList<>(annotations.kafkaListeners());
+        List<Subscription> consumes = new ArrayList<>();
+        for (Subscription listener : annotations.kafkaListeners()) {
+            consumes.add(new Subscription(listener.topic(), listener.via(), listener.group(), listener.payloadType(),
+                    listener.source(), locate(sources, listener.location())));
+        }
         List<Publication> publishes = new ArrayList<>();
-        streamFunctions(properties, annotations, consumes, publishes);
+        streamFunctions(properties, annotations, sources, consumes, publishes);
         for (SourceScanner.TemplateSend send : sources.kafkaSends()) {
             publishes.add(new Publication(send.topic(), "kafka-template", send.payloadType(), "static", send.location()));
         }
@@ -54,13 +68,15 @@ public final class Extractor {
 
         return new ServiceGraph(
                 service,
+                repository(projectDir),
                 commitSha(projectDir),
                 Instant.now().toString(),
-                annotations.exposes(),
+                exposes,
                 distinct(calls),
                 distinct(publishes),
                 distinct(consumes),
-                schemas(annotations.classIndex(), publishes, consumes));
+                schemas(annotations.classIndex(), publishes, consumes),
+                graphqlSchema.map(GraphQlScanner.Schema::sdl).orElse(null));
     }
 
     private List<HttpCall> httpCalls(SourceScanner.Result sources) {
@@ -69,17 +85,83 @@ public final class Extractor {
             var target = TargetServiceResolver.resolve(call.baseUrl());
             String baseUrl = call.baseUrl() == null ? null : call.baseUrl().raw();
             if (target.isEmpty()) {
-                calls.add(new HttpCall("unknown", call.method(), call.path(), baseUrl, "static", "low", call.location()));
+                calls.add(new HttpCall("unknown", call.method(), call.path(), baseUrl, call.via(), "static", "low", call.location(), null));
                 continue;
             }
-            String path = call.path() == null ? null : (target.get().basePath() + "/" + call.path()).replaceAll("/+", "/");
+            String path = call.path() == null ? null : joinPath(target.get().basePath(), call.path());
             String confidence = path == null ? "low" : target.get().confidence();
-            calls.add(new HttpCall(target.get().service(), call.method(), path, baseUrl, "static", confidence, call.location()));
+            calls.add(new HttpCall(target.get().service(), call.method(), path, baseUrl, call.via(), "static", confidence, call.location(), null));
         }
         return calls;
     }
 
-    private void streamFunctions(SpringProperties properties, AnnotationScanner.Result annotations,
+    private List<HttpCall> declarativeCalls(SpringProperties properties, AnnotationScanner.Result annotations, SourceScanner.Result sources) {
+        List<HttpCall> calls = new ArrayList<>();
+        for (AnnotationScanner.DeclarativeClient client : annotations.declarativeClients()) {
+            SourceScanner.BaseUrl baseUrl = client.url() != null
+                    ? new SourceScanner.BaseUrl(client.url(), properties.resolve(client.url()), SpringProperties.placeholderKey(client.url()).orElse(null))
+                    : sources.proxyBaseUrls().get(client.interfaceName().replace('$', '.'));
+            Optional<TargetServiceResolver.Target> target = TargetServiceResolver.resolve(baseUrl);
+            String service;
+            String confidence;
+            String basePath = target.map(TargetServiceResolver.Target::basePath).orElse("");
+            if (target.isPresent()) {
+                service = target.get().service();
+                confidence = service.equals(client.serviceName()) ? "high" : target.get().confidence();
+            } else if (client.serviceName() != null) {
+                service = client.serviceName();
+                confidence = baseUrl == null ? "high" : "medium";
+            } else {
+                service = "unknown";
+                confidence = "low";
+            }
+            for (AnnotationScanner.ClientMethod method : client.methods()) {
+                calls.add(new HttpCall(service, method.httpMethod(), joinPath(basePath, method.path()),
+                        baseUrl == null ? null : baseUrl.raw(), client.kind(), "static", confidence,
+                        sources.locate(client.interfaceName(), method.methodName()), null));
+            }
+        }
+        return calls;
+    }
+
+    private List<HttpCall> graphQlCalls(Path resources, SourceScanner.Result sources) throws IOException {
+        List<HttpCall> calls = new ArrayList<>();
+        for (SourceScanner.GraphQlClientCall call : sources.graphQlCalls()) {
+            String document = call.documentText();
+            if (document == null && call.documentName() != null) {
+                document = GraphQlScanner.loadDocument(resources, call.documentName()).orElse(null);
+            }
+            Optional<TargetServiceResolver.Target> target = TargetServiceResolver.resolve(call.baseUrl());
+            String service = target.map(TargetServiceResolver.Target::service).orElse("unknown");
+            String confidence = target.map(TargetServiceResolver.Target::confidence).orElse("low");
+            String baseUrl = call.baseUrl() == null ? null : call.baseUrl().raw();
+            List<GraphQlScanner.Operation> operations = document == null ? List.of() : GraphQlScanner.rootOperations(document);
+            if (operations.isEmpty()) {
+                calls.add(new HttpCall(service, "GRAPHQL", null, baseUrl, "graphql", "static", "low", call.location(), document));
+            }
+            for (GraphQlScanner.Operation operation : operations) {
+                calls.add(new HttpCall(service, operation.type(), operation.field(), baseUrl, "graphql", "static", confidence, call.location(), document));
+            }
+        }
+        return calls;
+    }
+
+    private static String joinPath(String base, String path) {
+        String joined = ("/" + base + "/" + path).replaceAll("/+", "/");
+        return joined.length() > 1 && joined.endsWith("/") ? joined.substring(0, joined.length() - 1) : joined;
+    }
+
+    private static String locate(SourceScanner.Result sources, String handler) {
+        int hash = handler.indexOf('#');
+        if (hash < 0) {
+            return handler;
+        }
+        String method = handler.substring(hash + 1);
+        int colon = method.indexOf(':');
+        return sources.locate(handler.substring(0, hash), colon < 0 ? method : method.substring(0, colon));
+    }
+
+    private void streamFunctions(SpringProperties properties, AnnotationScanner.Result annotations, SourceScanner.Result sources,
                                  List<Subscription> consumes, List<Publication> publishes) {
         Map<String, AnnotationScanner.FunctionBean> beans = annotations.functionBeans();
         Set<String> active = new LinkedHashSet<>();
@@ -101,13 +183,13 @@ public final class Extractor {
                 String destination = properties.get(BINDINGS + binding + ".destination").orElse(binding);
                 String group = properties.get(BINDINGS + binding + ".group").orElse(null);
                 for (String topic : destination.split(",")) {
-                    consumes.add(new Subscription(topic.trim(), "stream-function", group, bean.inputType(), "static", bean.location()));
+                    consumes.add(new Subscription(topic.trim(), "stream-function", group, bean.inputType(), "static", locate(sources, bean.location())));
                 }
             }
             if (bean.outputType() != null) {
                 String binding = name + "-out-0";
                 String destination = properties.get(BINDINGS + binding + ".destination").orElse(binding);
-                publishes.add(new Publication(destination, "stream-function", bean.outputType(), "static", bean.location()));
+                publishes.add(new Publication(destination, "stream-function", bean.outputType(), "static", locate(sources, bean.location())));
             }
         }
     }
@@ -127,19 +209,40 @@ public final class Extractor {
         return items.stream().distinct().toList();
     }
 
+    private static String repository(Path projectDir) {
+        String fromCi = System.getenv("CI_PROJECT_URL");
+        if (fromCi != null && !fromCi.isBlank()) {
+            return fromCi;
+        }
+        String remote = git(projectDir, "remote", "get-url", "origin");
+        if (remote == null) {
+            return null;
+        }
+        String https = remote.startsWith("git@") ? "https://" + remote.substring(4).replaceFirst(":", "/") : remote;
+        return https.endsWith(".git") ? https.substring(0, https.length() - 4) : https;
+    }
+
     private static String commitSha(Path projectDir) {
         String fromCi = System.getenv("CI_COMMIT_SHA");
         if (fromCi != null && !fromCi.isBlank()) {
             return fromCi;
         }
+        String sha = git(projectDir, "rev-parse", "--short", "HEAD");
+        return sha == null ? "unknown" : sha;
+    }
+
+    private static String git(Path projectDir, String... args) {
+        List<String> command = new ArrayList<>(List.of("git", "-C", projectDir.toString()));
+        command.addAll(List.of(args));
         try {
-            Process process = new ProcessBuilder("git", "-C", projectDir.toString(), "rev-parse", "--short", "HEAD")
-                    .redirectErrorStream(true)
-                    .start();
+            Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
             String output = new String(process.getInputStream().readAllBytes()).trim();
-            return process.waitFor() == 0 && !output.isEmpty() ? output : "unknown";
-        } catch (IOException | InterruptedException e) {
-            return "unknown";
+            return process.waitFor() == 0 && !output.isEmpty() ? output : null;
+        } catch (IOException e) {
+            return null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
         }
     }
 }

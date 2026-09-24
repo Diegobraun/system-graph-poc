@@ -1,7 +1,8 @@
 # loan-service
 
-Serviço de empréstimos. Usa **Spring Cloud Stream** (função `Consumer` e `StreamBridge`) para Kafka e
-**`RestClient`** para chamar o account-service.
+Serviço de empréstimos. Usa **Spring Cloud Stream** (função `Consumer` e `StreamBridge`) para Kafka e chama o
+account-service de três jeitos, de propósito, para exercitar o extrator: **`RestClient`**, **HTTP Interface
+(`@HttpExchange`)** e **GraphQL** (`HttpSyncGraphQlClient`).
 
 ## Contratos
 
@@ -9,9 +10,12 @@ Serviço de empréstimos. Usa **Spring Cloud Stream** (função `Consumer` e `St
 |---|---|---|
 | REST exposto | `POST /loans` | pede empréstimo: `accountId`, `amount`, `installments` |
 | REST exposto | `GET /loans/{id}` | consulta empréstimo |
+| REST exposto | `GET /loans?accountId=` | empréstimos de uma conta, chamado pelo account-service via Feign |
+| REST exposto | `GET /credit-analysis/{customerId}` | renda, saldo das contas e valor máximo de empréstimo |
 | REST exposto | `GET /offers/{accountId}` | oferta pré-aprovada criada ao abrir a conta |
-| REST chamado | `GET /accounts/{id}` no account-service | status da conta e `customerId` |
-| REST chamado | `GET /customers/{id}` no account-service | renda mensal para o limite |
+| REST chamado | `GET /accounts/{id}` no account-service | `AccountClient`, cadeia `restClient.get().uri(...)` |
+| REST chamado | `GET /customers/{id}` no account-service | `CustomerApi`, interface `@HttpExchange` criada em `HttpClientsConfig` |
+| GraphQL chamado | `query customer` no account-service | `CustomerProfileClient`, documento [`customerProfile.graphql`](src/main/resources/graphql-documents/customerProfile.graphql) |
 | Kafka consome | `account-opened` | função `accountOpened`, cria a oferta pré-aprovada |
 | Kafka publica | `loan-disbursed` | `StreamBridge` no binding `loanDisbursed-out-0` |
 

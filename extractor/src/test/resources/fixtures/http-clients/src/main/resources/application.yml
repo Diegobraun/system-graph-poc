@@ -1,0 +1,13 @@
+spring:
+  application:
+    name: fixture-service
+
+services:
+  account-service:
+    url: http://localhost:8081
+  loan-service:
+    url: http://localhost:8082
+  payments:
+    url: http://payments-service:8080
+  profile-service:
+    url: http://localhost:8085

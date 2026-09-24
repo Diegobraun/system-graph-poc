@@ -1,0 +1,3 @@
+mutation closeDay($date: String!) {
+    closeDay(date: $date)
+}

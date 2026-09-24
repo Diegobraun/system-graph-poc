@@ -19,11 +19,4 @@ public class AccountClient {
                 .retrieve()
                 .body(AccountResponse.class);
     }
-
-    public CustomerResponse getCustomer(Long customerId) {
-        return restClient.get()
-                .uri("/customers/{id}", customerId)
-                .retrieve()
-                .body(CustomerResponse.class);
-    }
 }

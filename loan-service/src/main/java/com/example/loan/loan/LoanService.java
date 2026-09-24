@@ -2,6 +2,7 @@ package com.example.loan.loan;
 
 import com.example.loan.client.AccountClient;
 import com.example.loan.client.AccountResponse;
+import com.example.loan.client.CustomerApi;
 import com.example.loan.client.CustomerResponse;
 import com.example.loan.messaging.LoanEventPublisher;
 import java.math.BigDecimal;
@@ -15,18 +16,20 @@ public class LoanService {
     private static final BigDecimal INCOME_MULTIPLIER = BigDecimal.valueOf(5);
 
     private final AccountClient accountClient;
+    private final CustomerApi customerApi;
     private final LoanRepository repository;
     private final LoanEventPublisher publisher;
 
-    public LoanService(AccountClient accountClient, LoanRepository repository, LoanEventPublisher publisher) {
+    public LoanService(AccountClient accountClient, CustomerApi customerApi, LoanRepository repository, LoanEventPublisher publisher) {
         this.accountClient = accountClient;
+        this.customerApi = customerApi;
         this.repository = repository;
         this.publisher = publisher;
     }
 
     public Loan request(Long accountId, BigDecimal amount, int installments) {
         AccountResponse account = accountClient.getAccount(accountId);
-        CustomerResponse customer = accountClient.getCustomer(account.customerId());
+        CustomerResponse customer = customerApi.get(account.customerId());
         String id = "LN-" + UUID.randomUUID().toString().substring(0, 8);
 
         if (!"ACTIVE".equals(account.status())) {

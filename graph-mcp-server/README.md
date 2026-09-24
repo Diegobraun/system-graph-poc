@@ -13,7 +13,7 @@ mvn spring-boot:run
 |---|---|---|
 | `list_services` | | serviços, commit, contagens |
 | `service_overview` | `service` | endpoints (com quem chama), chamadas, tópicos (com o outro lado), dependentes, notas |
-| `impact_of_change` | `service`, `contract` | serviços afetados com arquivo e linha, problemas de schema, notas, orientação |
+| `impact_of_change` | `service`, `contract` | serviços afetados com repositório, commit, arquivo e linha; campos GraphQL usados; problemas de payload; notas |
 | `who_consumes` | `topic` | produtores, consumidores no código, consumidores vistos no Kafka |
 | `compare_event_schemas` | `topic` | schemas dos dois lados e divergências campo a campo |
 | `find_contract_issues` | | todos os problemas de integração do grafo |
@@ -21,8 +21,14 @@ mvn spring-boot:run
 | `graph_model` | | labels, relações, propriedades e contagens |
 | `read_cypher` | `query` | até 200 linhas, sessão somente leitura |
 
-`contract` aceita tópico (`account-opened`), endpoint com método (`GET /accounts/{id}`) ou só o path
-(`/accounts/{id}`, que considera todos os métodos).
+`contract` aceita:
+
+| Formato | Exemplo | Responde |
+|---|---|---|
+| tópico Kafka | `account-opened` | consumidores e compatibilidade de payload |
+| endpoint HTTP | `GET /accounts/{id}` ou `/accounts/{id}` | quem chama, e por qual client (`via`) |
+| operação GraphQL | `QUERY customer` | quem chama e quais campos cada um seleciona |
+| campo GraphQL | `Customer.monthlyIncome` | só os clientes cujo documento seleciona aquele campo |
 
 ## Severidade dos problemas de schema
 
@@ -39,6 +45,7 @@ mvn spring-boot:run
 | `tools.SystemGraphTools` | Métodos `@Tool` registrados no MCP via `MethodToolCallbackProvider` |
 | `graph.GraphClient` | Acesso ao Neo4j: leitura em sessão READ com timeout e limite de linhas, conversão de tipos |
 | `graph.SchemaComparator` | Comparação de payload produtor x consumidor (com testes) |
+| `graph.GraphQlAnalyzer` | Valida documento GraphQL do cliente contra o schema do servidor e lista os campos usados (com testes) |
 
 ## Configuração
 

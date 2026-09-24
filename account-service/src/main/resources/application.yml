@@ -19,3 +19,7 @@ spring:
 app:
   topics:
     loan-disbursed: loan-disbursed
+
+services:
+  loan-service:
+    url: http://localhost:8082

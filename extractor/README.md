@@ -16,7 +16,8 @@ java -jar target/graph-extractor.jar <comando>
 java -jar target/graph-extractor.jar extract --project ../loan-service [--out arquivo.json]
 ```
 
-Lê `target/classes` (precisa de `mvn compile` antes), `src/main/java`, `src/main/resources/application*.yml` e o
+Lê `target/classes` (precisa de `mvn compile` antes), `src/main/java`, `src/main/resources/application*.yml`,
+schemas GraphQL em `src/main/resources/graphql`, documentos em `src/main/resources/graphql-documents` e o
 `system-graph.yml` opcional. Por padrão escreve em `<projeto>/target/service-graph.json`. Chamadas cujo serviço
 alvo não foi identificado aparecem como aviso no console.
 
@@ -46,16 +47,21 @@ Conexão com o Neo4j em todos os comandos: `--neo4j-uri`, `--neo4j-user`, `--neo
 ```json
 {
   "service": "loan-service",
+  "repository": "https://gitlab.empresa/credito/loan-service",
   "commitSha": "a1b2c3d",
   "exposes": [{ "method": "POST", "path": "/loans", "handler": "com.example.loan.loan.LoanController#request:29" }],
   "calls": [{
     "targetService": "account-service", "method": "GET", "path": "/accounts/{id}",
-    "baseUrl": "${services.account-service.url}", "source": "static", "confidence": "medium",
+    "baseUrl": "${services.account-service.url}", "via": "rest-client", "source": "static", "confidence": "medium",
     "location": "src/main/java/com/example/loan/client/AccountClient.java:17"
+  }, {
+    "targetService": "account-service", "method": "QUERY", "path": "customer", "via": "graphql",
+    "document": "query customerProfile($id: ID!) { customer(id: $id) { name monthlyIncome } }"
   }],
   "publishes": [{ "topic": "loan-disbursed", "via": "stream-bridge", "payloadType": "com.example.loan.messaging.LoanDisbursedEvent" }],
   "consumes": [{ "topic": "account-opened", "via": "stream-function", "group": "loan-service", "payloadType": "com.example.loan.messaging.AccountOpenedEvent" }],
-  "schemas": [{ "className": "com.example.loan.messaging.AccountOpenedEvent", "fields": [{ "name": "monthlyIncome", "type": "BigDecimal" }] }]
+  "schemas": [{ "className": "com.example.loan.messaging.AccountOpenedEvent", "fields": [{ "name": "monthlyIncome", "type": "BigDecimal" }] }],
+  "graphqlSchema": null
 }
 ```
 
@@ -67,12 +73,21 @@ outra ferramenta) e reaproveitar o `ingest`.
 | Classe | Papel |
 |---|---|
 | `scan.Extractor` | Orquestra a extração e junta tudo no `ServiceGraph` |
-| `scan.AnnotationScanner` | ClassGraph: controllers, `@KafkaListener`, beans funcionais do Stream, campos dos DTOs |
-| `scan.SourceScanner` | JavaParser: cadeias `RestClient`/`WebClient`, `KafkaTemplate.send`, `StreamBridge.send`, `baseUrl` |
+| `scan.AnnotationScanner` | ClassGraph: controllers, `@FeignClient`, `@HttpExchange`, `@QueryMapping` e afins, `@KafkaListener`, beans funcionais do Stream, campos dos DTOs |
+| `scan.SourceScanner` | JavaParser: cadeias `RestClient`/`WebClient`, `createClient(...)`, clients GraphQL, `KafkaTemplate.send`, `StreamBridge.send`, `baseUrl`, linha de cada método |
+| `scan.GraphQlScanner` | graphql-java: operações raiz do schema e dos documentos dos clients |
 | `scan.SpringProperties` | Carrega `application.properties`/`.yml` e resolve `${...}` |
 | `scan.TargetServiceResolver` | Descobre o serviço alvo a partir da URL ou do nome da propriedade |
 | `scan.Manifest` | Lê o `system-graph.yml` |
 | `ingest.GraphIngestor` | Grava no Neo4j |
 | `runtime.KafkaRuntimeInspector` | Lê consumer groups via `AdminClient` |
+
+## Testes
+
+`HttpClientExtractionTest` e `GraphQlExtractionTest` compilam projetos de exemplo em
+[`src/test/resources/fixtures`](src/test/resources/fixtures) dentro do próprio teste e rodam a extração completa
+sobre eles. Cobrem cadeias `RestClient`, Feign com e sem `url`, `@HttpExchange` com `baseUrl` no `@Bean`, via
+`@Qualifier` e com URL absoluta, schema GraphQL com `extend type` e `@SchemaMapping`, e documentos GraphQL inline e
+em arquivo.
 
 As regras de extração estão detalhadas em [docs/architecture.md](../docs/architecture.md#regras-de-extração).

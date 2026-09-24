@@ -50,6 +50,8 @@ system-graph:
 ```
 
 O job roda só na branch default, compila, extrai, grava no Neo4j e guarda o `service-graph.json` como artefato.
+No GitLab o extrator usa `CI_COMMIT_SHA` e `CI_PROJECT_URL`, então cada serviço no grafo aponta para o próprio
+repositório e commit.
 Variáveis `NEO4J_URI`, `NEO4J_USER` e `NEO4J_PASSWORD` ficam como CI/CD variables no grupo, mascaradas.
 
 A adoção pode ser gradual. Serviços sem o job aparecem como `indexed: false` quando outros os chamam, e as tools
@@ -91,8 +93,9 @@ arquivo de regras de cada ferramenta.
 - **Nome da propriedade de URL**: `services.<nome-do-serviço>.url`. Resolve o serviço alvo mesmo quando a URL
   local é `localhost`.
 - **`group.id` igual ao `spring.application.name`**: permite cruzar código e cluster.
-- **HTTP Interfaces (`@HttpExchange`)** para clients novos: tornam a extração de chamadas REST exata. Rodam em
-  cima de `RestClient` e `WebClient`, que já são usados.
+- **HTTP Interfaces (`@HttpExchange`) ou Feign** para clients novos: a extração de chamadas fica exata, sem
+  depender de ler cadeias de `RestClient`/`WebClient`.
+- **Documentos GraphQL em arquivo** (`resources/graphql-documents`) em vez de strings montadas no código.
 - **Tópicos em constantes ou propriedades**, nunca montados em runtime.
 
 ## Como medir se vale a pena
@@ -106,8 +109,8 @@ Antes de expandir, vale um teste com 3 ou 4 serviços que conversam muito entre 
 
 ## Próximos passos técnicos
 
-- Suporte a `@HttpExchange` e `@FeignClient` no extrator.
-- Comparação de schema em mais de um nível (DTOs aninhados, listas).
+- `@ImportHttpServices` e grupos de HTTP services (Spring Framework 7 / Boot 4).
+- Comparação de payload Kafka em mais de um nível (DTOs aninhados, listas).
 - Schema de resposta REST: comparar o DTO do client com o DTO retornado pelo controller, como já é feito para eventos.
 - Profiles do Spring, para ter o grafo por ambiente.
 - Autenticação no MCP server e usuário Neo4j só de leitura.

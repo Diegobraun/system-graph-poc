@@ -40,8 +40,8 @@ flowchart LR
 
 | Nó | Chave | Propriedades |
 |---|---|---|
-| `Service` | `name` (= `spring.application.name`) | `indexed`, `commitSha`, `extractedAt`, `ingestedAt` |
-| `Endpoint` | `key` = `serviço MÉTODO /path/{}` | `service`, `method`, `path` |
+| `Service` | `name` (= `spring.application.name`) | `indexed`, `repository`, `commitSha`, `extractedAt`, `ingestedAt`, `graphqlSchema` |
+| `Endpoint` | `key` = `serviço MÉTODO /path/{}` ou `serviço QUERY campo` | `service`, `method`, `path`, `protocol` (`http`, `graphql`) |
 | `Topic` | `name` | |
 | `Schema` | `key` = `serviço\|tópico\|lado\|classe` | `side` (producer, consumer), `className`, `fieldNames[]`, `fieldTypes[]` |
 | `Note` | `id` | `text`, `author`, `status`, `createdAt` |
@@ -49,10 +49,14 @@ flowchart LR
 | Relação | Propriedades |
 |---|---|
 | `EXPOSES` | `handler` (classe#método:linha) |
-| `CALLS` | `location` (arquivo:linha), `confidence`, `source`, `baseUrl` |
+| `CALLS` | `via`, `location` (arquivo:linha), `confidence`, `source`, `baseUrl`, `document` (GraphQL) |
 | `DEPENDS_ON` | `source` |
 | `PUBLISHES` / `CONSUMES` | `via`, `payloadType`, `location`, `source`; `CONSUMES` também tem `group` |
 | `OBSERVED_CONSUMING` | `activeMembers`, `state`, `observedAt` |
+
+Operações GraphQL também são `Endpoint`: cada campo raiz de `Query`, `Mutation` e `Subscription` vira
+`account-service QUERY customer`. Assim `CALLS`, `impact_of_change` e `find_contract_issues` tratam HTTP e
+GraphQL do mesmo jeito, e o que é específico de GraphQL (schema e documento) fica em propriedades.
 
 A chave do endpoint normaliza variáveis de path: `/accounts/{id}` e `/accounts/{accountId}` viram
 `/accounts/{}`. É isso que liga o `CALLS` de um serviço ao `EXPOSES` do outro, mesmo com nomes de variável
@@ -72,6 +76,10 @@ chamada de método, que não existe no bytecode de forma fácil de interpretar.
 | `@RestController` + `@GetMapping` etc. | `EXPOSES` | ClassGraph: path da classe + path do método |
 | `restClient.get().uri("/x/{id}")` | `CALLS` | JavaParser: verbo da cadeia, path literal ou constante |
 | `webClient.post().uri(...)` | `CALLS` | Igual ao `RestClient` |
+| interface `@HttpExchange` + `@GetExchange` etc. | `CALLS` | ClassGraph lê as anotações; JavaParser acha o `createClient(X.class)` e o `baseUrl` do client usado |
+| interface `@FeignClient(name, url, path)` + `@GetMapping` etc. | `CALLS` | ClassGraph; serviço alvo pelo `name`, conferido com a `url` quando existe |
+| `schema.graphqls` em `resources/graphql` + `@QueryMapping` etc. | `EXPOSES` (GraphQL) | graphql-java lê o SDL (inclusive `extend type`); ClassGraph liga cada campo raiz ao método que o resolve |
+| `graphQlClient.document(...)` / `.documentName(...)` | `CALLS` (GraphQL) | JavaParser acha a chamada e o `baseUrl`; o documento vem do literal, da constante ou de `resources/graphql-documents` |
 | `builder.baseUrl(url)` com `@Value("${...}")` | serviço alvo | JavaParser + resolução no `application.yml` |
 | `@KafkaListener(topics = "${...}")` | `CONSUMES` | ClassGraph + resolução de placeholder; tipo do payload pelo parâmetro |
 | `kafkaTemplate.send(Topics.X, key, event)` | `PUBLISHES` | JavaParser: tópico por constante, literal ou `@Value`; payload pelo argumento ou pelo genérico do `KafkaTemplate` |
@@ -80,10 +88,20 @@ chamada de método, que não existe no bytecode de forma fácil de interpretar.
 | campos do DTO de payload | `Schema` | ClassGraph: campos não estáticos da classe ou record |
 | `system-graph.yml` | qualquer relação | Manifesto para o que a análise não pega |
 
-### Como o serviço alvo de uma chamada REST é descoberto
+### Como o serviço alvo de uma chamada é descoberto
 
-1. Acha o `baseUrl(...)` do client: na atribuição do campo dentro da classe, no inicializador do campo, ou num
-   método `@Bean` com o mesmo nome do campo.
+O campo `via` de cada `CALLS` diz de onde a chamada veio: `rest-client`, `web-client`, `http-exchange`, `feign`,
+`graphql` ou `manifest`.
+
+Para Feign, o `name` do `@FeignClient` já é o nome lógico do serviço. Se houver `url`, ela é resolvida pelos
+passos abaixo. Quando os dois batem, a confiança é `high`.
+
+Para os demais:
+
+1. Acha o `baseUrl(...)` do client: na atribuição do campo dentro da classe, no inicializador do campo, num
+   método `@Bean` com o mesmo nome do campo ou, para `@HttpExchange`, no método que chama
+   `createClient(Interface.class)` (inclusive quando o `RestClient` vem de outro `@Bean` via `@Qualifier`). Para
+   GraphQL, também vale a `url(...)` do builder quando ela é absoluta.
 2. Resolve o valor. Se for `@Value("${services.account-service.url}")`, busca no `application.yml`.
 3. Se o host da URL for um nome (`http://account-service:8080`, `account-service.core.svc`), esse é o serviço.
    Confiança `high`.
@@ -92,6 +110,43 @@ chamada de método, que não existe no bytecode de forma fácil de interpretar.
 5. Se nada funcionar, a chamada fica como `unknown`, o extrator avisa, e ela pode ir para o manifesto.
 
 Esse passo 4 é o motivo de valer a pena padronizar o nome das propriedades de URL nos serviços da empresa.
+
+## GraphQL
+
+O schema é a especificação do contrato, então aqui o grafo vai mais longe que em REST e Kafka.
+
+- O extrator do **servidor** guarda o SDL inteiro em `Service.graphqlSchema`.
+- O extrator do **cliente** guarda o documento de cada chamada em `CALLS.document`.
+- O **MCP server** valida o documento contra o schema com graphql-java (as mesmas regras que o servidor aplica
+  em runtime) e percorre a seleção para saber exatamente quais campos cada cliente usa.
+
+Com isso dá para perguntar `impact_of_change` para um campo, como `Customer.monthlyIncome`, e receber só os
+clientes que selecionam aquele campo. Remover um campo que ninguém usa é seguro, e o grafo diz isso.
+
+A validação fica no MCP server, não no extrator, porque cliente e servidor estão em repositórios diferentes. O
+extrator do loan-service não tem acesso ao schema do account-service.
+
+## Repositórios separados
+
+Na empresa, cada serviço tem seu repositório. O desenho parte disso:
+
+| Onde | O que roda | O que enxerga |
+|---|---|---|
+| CI de cada serviço | `extract` e `ingest` | só o próprio código e config |
+| Neo4j central | o grafo | todos os serviços que já rodaram o job |
+| MCP server central | tools, validação GraphQL, comparação de payload | o grafo inteiro |
+| Máquina do dev | Claude Code, Cursor, Copilot | o repositório aberto + o MCP |
+
+Tudo que depende de cruzar dois serviços é feito depois da ingestão: ligar `CALLS` a `EXPOSES` pela chave do
+endpoint, comparar payload de produtor e consumidor, validar documento GraphQL contra schema. Nenhum
+repositório precisa de acesso ao código de outro.
+
+Como o assistente só vê o repositório aberto, cada `Service` guarda `repository` (vem de `CI_PROJECT_URL` no
+GitLab ou do `git remote` local) e `commitSha`. As respostas de impacto trazem repositório, commit e
+`arquivo:linha` de cada serviço afetado, para o dev ou o assistente abrir o lugar certo no outro repositório.
+
+A adoção também pode ser gradual. Um serviço que ainda não tem o job aparece como `indexed: false` quando alguém o
+chama, e as tools deixam isso explícito.
 
 ## Ingestão
 
