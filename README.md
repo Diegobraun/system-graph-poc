@@ -10,6 +10,11 @@ guarda num grafo (Neo4j) e expõe o grafo para qualquer assistente via MCP (Mode
 Na prática: um dev abre o `account-service`, pede para renomear um campo de um evento, e o assistente responde
 que o `loan-service` quebra, em qual arquivo e em qual linha, sem ninguém ter aberto o outro repositório.
 
+![Demonstração da interface: entrada do grafo, detalhes de um serviço, problema de contrato e busca de impacto](docs/img/demo.gif)
+
+*Interface visual em http://localhost:8090: o grafo montando, os detalhes do payment-service, o erro de contrato
+entre account e customer e o impacto de mudar o evento `account-opened`.*
+
 ## Conteúdo
 
 A POC tem um repositório por serviço, como seria na empresa:
