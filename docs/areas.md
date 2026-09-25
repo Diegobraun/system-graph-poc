@@ -94,6 +94,8 @@ O MCP do hub (sem `GRAPH_AREA`) é a visão da empresa: todos os serviços, só 
 
 ## Interface
 
+[![Demonstração: hub, área contas e área crédito](img/demo.gif)](img/demo.mp4)
+
 A interface de cada área desenha os serviços agrupados em caixas por área, com a área da casa em destaque e os
 serviços de outras áreas que se conectam com ela em volta. Os links no topo trocam entre as instâncias.
 
