@@ -8,4 +8,10 @@ if [ ! -f "$EXTRACTOR" ]; then
   mvn -q -B -f "$ROOT/extractor/pom.xml" package -DskipTests
 fi
 
-java -jar "$EXTRACTOR" crawl --config "$ROOT/crawl.yml" "$@"
+status=0
+while IFS='|' read -r area _ _; do
+  echo "== área $area"
+  java -jar "$EXTRACTOR" crawl --config "$ROOT/areas/$area.yml" "$@" || status=$?
+  echo
+done < <(areas)
+exit $status

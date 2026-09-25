@@ -21,7 +21,7 @@ A POC tem um repositório por serviço, como seria na empresa:
 
 | Repositório | Porta | O que é |
 |---|---|---|
-| **system-graph-poc** (este) | 8090 | Plataforma: extrator, MCP server, interface visual, templates de CI, scripts e docs |
+| **system-graph-poc** (este) | 8090 a 8093 | Plataforma: extrator, MCP server, interface visual, templates de CI, scripts e docs |
 | [system-graph-account-service](https://github.com/Diegobraun/system-graph-account-service) | 8081 | Clientes e contas. REST, GraphQL (Spring for GraphQL), spring-kafka, Feign para loan e customer |
 | [system-graph-loan-service](https://github.com/Diegobraun/system-graph-loan-service) | 8082 | Empréstimos. Spring Cloud Stream, `RestClient`, `@HttpExchange` e GraphQL para o account |
 | [system-graph-customer-service](https://github.com/Diegobraun/system-graph-customer-service) | 8083 | KYC e perfil de risco. `@HttpExchange` para o account, `RestClient` para bureau e core-banking |
@@ -44,7 +44,7 @@ Conteúdo deste repositório:
 | [`graph-mcp-server`](graph-mcp-server) | MCP server em Spring AI que responde perguntas sobre o grafo |
 | [`ci`](ci) | Template de GitLab CI que cada serviço inclui para rodar a extração |
 | [`scripts`](scripts) | Scripts para subir tudo, atualizar o grafo e rodar a demo |
-| [`docs`](docs) | [Arquitetura e decisões](docs/architecture.md), [como levar para a empresa](docs/rollout-gitlab.md), [crawl local](docs/crawl.md) e [fontes experimentais](docs/experimental.md) |
+| [`docs`](docs) | [Arquitetura e decisões](docs/architecture.md), [como levar para a empresa](docs/rollout-gitlab.md), [crawl local](docs/crawl.md), [grafo por área](docs/areas.md) e [fontes experimentais](docs/experimental.md) |
 
 Cada serviço extrai só o próprio código, no próprio CI: o workflow `system-graph` de cada repositório baixa o
 `graph-extractor.jar` da [release desta plataforma](https://github.com/Diegobraun/system-graph-poc/releases) e
@@ -53,6 +53,22 @@ gera o `service-graph.json` a cada push. O cruzamento entre serviços acontece n
 
 Sem acesso ao pipeline, o mesmo grafo pode ser montado da máquina do dev com o [`crawl`](docs/crawl.md), que
 passa por uma lista de repositórios, faz pull, compila, extrai e grava tudo de uma vez.
+
+## Áreas
+
+Os serviços estão divididos em três áreas de negócio, cada uma com o próprio Neo4j e o próprio MCP server. Um
+quarto grafo, o hub, guarda só os contratos e as chamadas entre áreas. Detalhes em [docs/areas.md](docs/areas.md).
+
+| Área | Serviços (time) | Neo4j | MCP e interface |
+|---|---|---|---|
+| contas | account-service (Contas Correntes), customer-service (Cadastro) | 7474 / 7687 | 8091 |
+| credito | loan-service (Crédito), investment-service (Investimentos) | 7475 / 7688 | 8092 |
+| pagamentos | payment-service (PIX), fraud-service (Prevenção a Fraude), notification-service (Comunicação) | 7476 / 7689 | 8093 |
+| hub | todos, só a fronteira | 7477 / 7690 | 8090 |
+
+O `.mcp.json` de cada serviço aponta para o MCP da própria área. Perguntado de dentro de contas, o
+`impact_of_change` de `account-opened` traz o customer-service do grafo local e o loan-service e o
+notification-service do hub, avisando que as áreas crédito e pagamentos precisam ser avisadas.
 
 ## Arquitetura
 
@@ -70,18 +86,21 @@ flowchart LR
     end
 
     K[("Kafka")]
-    N[("Neo4j")]
-    M["graph-mcp-server<br/>Spring AI MCP + UI"]
+    N[("Neo4j da área")]
+    HB[("Neo4j hub")]
+    M["graph-mcp-server da área<br/>Spring AI MCP + UI"]
     C["Claude Code<br/>Cursor, Copilot..."]
-    B["Navegador<br/>localhost:8090"]
+    B["Navegador<br/>localhost:8091"]
 
     A -- "bytecode + fontes + yml" --> X
     L -- "bytecode + fontes + yml" --> X
     X -- "service-graph.json" --> I
     I -- "MERGE" --> N
+    I -- "contratos e chamadas entre áreas" --> HB
     K -- "consumer groups" --> R
     R -- "OBSERVED_CONSUMING" --> N
     M -- "Cypher, sessão READ" --> N
+    M -- "fronteira" --> HB
     C -- "MCP streamable HTTP /mcp" --> M
     B -- "/api/*" --> M
 ```
@@ -91,8 +110,8 @@ Três etapas independentes:
 1. **Extração** (`extract`): roda depois do `mvn compile`. Lê anotações no bytecode (ClassGraph), cadeias de
    chamada no código-fonte (JavaParser), schemas e documentos GraphQL (graphql-java) e resolve propriedades do
    `application.yml`. Não sobe a aplicação.
-2. **Ingestão** (`ingest`): grava o JSON no Neo4j. Cada serviço substitui as próprias relações, então código
-   removido some do grafo.
+2. **Ingestão** (`ingest`): grava o JSON no Neo4j da área e exporta a fronteira para o hub. Cada serviço
+   substitui as próprias relações, então código removido some do grafo.
 3. **Consulta** (MCP): o assistente chama tools como `impact_of_change` e `service_overview` no meio da tarefa.
 
 Detalhes das regras de extração, do modelo do grafo e das decisões em [docs/architecture.md](docs/architecture.md).
@@ -163,25 +182,25 @@ Pré-requisitos: Java 21+, Maven 3.9+, Docker.
 git clone https://github.com/Diegobraun/system-graph-poc.git
 cd system-graph-poc
 scripts/clone-services.sh   # clona os 7 serviços como pastas irmãs (../system-graph-*-service)
-scripts/start-all.sh        # Kafka + Neo4j no Docker, depois os 7 serviços e o MCP server
+scripts/start-all.sh        # Kafka + 4 Neo4j no Docker, depois os 7 serviços e os 4 MCP servers
 scripts/demo-flow.sh        # executa o fluxo de negócio com curl
-scripts/refresh-graph.sh    # crawl: pull, compila, extrai, grava no Neo4j e lê os consumer groups
+scripts/refresh-graph.sh    # crawl de cada área: pull, compila, extrai, grava na área e no hub
 scripts/load-examples.sh    # opcional: contrato OpenAPI do core-banking e chamadas vistas por um APM
 ```
 
 | O quê | Onde |
 |---|---|
-| Interface visual | http://localhost:8090 |
-| MCP server | http://localhost:8090/mcp |
+| Interface visual | http://localhost:8091 (contas), 8092 (credito), 8093 (pagamentos), 8090 (hub) |
+| MCP server | `/mcp` nas mesmas portas |
 | Serviços | http://localhost:8081 a 8087 (tabela acima) |
-| Neo4j Browser | http://localhost:7474 (neo4j / password123) |
+| Neo4j Browser | http://localhost:7474 a 7477 (neo4j / password123) |
 
 Para parar: `scripts/stop-all.sh` (só as aplicações) ou `scripts/stop-all.sh --all` (derruba também o Docker).
 
 ## Interface visual
 
-O `graph-mcp-server` também serve uma página em http://localhost:8090 que desenha o grafo e usa as mesmas
-consultas das tools do MCP:
+O `graph-mcp-server` também serve uma página (http://localhost:8091 para contas, 8090 para o hub) que desenha
+o grafo e usa as mesmas consultas das tools do MCP:
 
 ![Mapa dos serviços](docs/img/ui-map.jpg)
 
@@ -191,6 +210,8 @@ consultas das tools do MCP:
   o `find_contract_issues` encontra; clicar num item aproxima a câmera no trecho do grafo.
 - **Detalhes**: clicar num serviço, tópico ou seta mostra endpoints, quem chama cada um, payloads e o
   `arquivo:linha` com link para o repositório no commit indexado.
+- **Áreas**: serviços agrupados em caixas por área, com a área da instância em destaque. Os links no topo trocam
+  entre as áreas e o hub.
 - **Impacto**: escolha o serviço e o contrato no topo (tópico, `GET /accounts/{id}`, `QUERY customer`,
   `Customer.monthlyIncome`). O grafo apaga tudo que não é afetado.
 
@@ -201,7 +222,7 @@ frontend e sem acesso à internet em runtime.
 
 ## Modo local para os seus projetos
 
-O `refresh-graph.sh` roda o `crawl` com o [`crawl.yml`](crawl.yml) desta POC. Para usar com os projetos do
+O `refresh-graph.sh` roda o `crawl` com os arquivos de [`areas/`](areas), um por área. Para usar com os projetos do
 trabalho, basta outro arquivo com a lista (caminho local ou URL do git) e rodar o jar da release:
 
 ```bash
@@ -250,6 +271,9 @@ aparece como erro (aresta vermelha na interface):
   "message": "account-service calls GET /kyc/{customerId}/documents on customer-service, but customer-service does not expose it"
 }
 ```
+
+Os dois serviços são da área contas, então essa chamada não sai para o hub: o erro só aparece no MCP de contas
+(`MCP_URL=http://localhost:8091/mcp scripts/mcp-call.sh find_contract_issues`).
 
 ### GraphQL: validação do documento contra o schema de outro repositório
 
@@ -302,7 +326,7 @@ O assistente estava aberto só no account-service e mesmo assim apontou arquivos
 enxerga. A resposta de cada tool traz o `repository` e o `commitSha` de cada serviço afetado, para abrir o
 arquivo no repositório certo.
 
-Outros clientes MCP (Cursor, VS Code com Copilot, Claude Desktop) usam a mesma URL `http://localhost:8090/mcp`.
+Outros clientes MCP (Cursor, VS Code com Copilot, Claude Desktop) usam a URL do MCP da área, por exemplo `http://localhost:8091/mcp`.
 
 ## Tools do MCP
 
@@ -315,15 +339,17 @@ Outros clientes MCP (Cursor, VS Code com Copilot, Claude Desktop) usam a mesma U
 | `compare_event_schemas` | Compara campo a campo o payload do produtor e dos consumidores |
 | `find_contract_issues` | Varredura geral: endpoint ou operação inexistente, documento GraphQL inválido, tópico sem produtor, payload divergente, consumidor oculto |
 | `record_note` | Grava regra de negócio ou pegadinha ligada a serviço, tópico ou endpoint (status `pending`) |
+| `list_areas` | Áreas, times, serviços e quantos contratos de cada área outras áreas usam |
 | `graph_model` | Descreve labels, relações e propriedades do grafo |
 | `read_cypher` | Cypher livre, somente leitura, limitado a 200 linhas |
 
 Para testar sem assistente: `scripts/mcp-call.sh <tool> '<json>'`, por exemplo
-`scripts/mcp-call.sh impact_of_change '{"service":"account-service","contract":"GET /accounts/{id}"}'`.
+`scripts/mcp-call.sh impact_of_change '{"service":"account-service","contract":"GET /accounts/{id}"}'`. O padrão é o hub; para
+uma área, `MCP_URL=http://localhost:8091/mcp scripts/mcp-call.sh ...`.
 
 ## Explorando no Neo4j Browser
 
-Abra http://localhost:7474 e rode:
+Abra http://localhost:7474 (contas; 7475 credito, 7476 pagamentos, 7477 hub) e rode:
 
 ```cypher
 MATCH (n) WHERE NOT n:Schema RETURN n
@@ -355,7 +381,7 @@ RETURN caller.name, e.method, e.path, owner.name, r.location
   arquivo, constantes e text blocks são.
 - A comparação de tipos é por nome simples (`Long`, `BigDecimal`), não por compatibilidade de JSON.
 - **Um serviço por projeto**: em repositório com várias aplicações, o extrator usa o primeiro
-  `spring.application.name` e avisa. Cada módulo de aplicação precisa entrar no `crawl.yml` separado.
+  `spring.application.name` e avisa. Cada módulo de aplicação precisa entrar no arquivo de crawl separado.
 - **Kotlin**: as classes compiladas entram, mas o código-fonte Kotlin não é lido (cadeias de `RestClient`,
   `KafkaTemplate` etc. ficam de fora).
 

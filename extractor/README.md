@@ -35,6 +35,10 @@ java -jar target/graph-extractor.jar ingest ../account-service/target/service-gr
 Cria as constraints na primeira execução e grava cada serviço numa transação, substituindo as relações
 anteriores dele.
 
+Com `--area contas --team "Contas Correntes"` o serviço ganha `area`, `team` e `IN_AREA`. Com `--hub-uri`
+(e `--hub-user`, `--hub-password`) também exporta para o hub os contratos e só as chamadas que saem da área.
+Veja [docs/areas.md](../docs/areas.md).
+
 ### kafka-runtime
 
 ```bash
@@ -47,12 +51,12 @@ Lista os consumer groups do cluster, com membros ativos e offsets commitados, e 
 ### crawl
 
 ```bash
-java -jar target/graph-extractor.jar crawl --config ../crawl.yml [--only a,b] [--no-pull] [--no-build] [--no-ingest]
+java -jar target/graph-extractor.jar crawl --config ../areas/contas.yml [--only a,b] [--no-pull] [--no-build] [--no-ingest]
 ```
 
 Para cada projeto do arquivo: clona ou faz `git pull --ff-only`, compila (`mvn compile` ou `gradle classes`,
 offline primeiro), extrai e grava `<output>/<serviço>.json`. No final faz o `ingest` de todos que deram certo e,
-se o arquivo tiver `kafka.bootstrap`, o `kafka-runtime`. Veja [docs/crawl.md](../docs/crawl.md).
+se o arquivo tiver `kafka.bootstrap`, o `kafka-runtime`. Com `hub:` no arquivo, exporta a fronteira da área. Veja [docs/crawl.md](../docs/crawl.md).
 
 ### experimental
 
@@ -106,7 +110,7 @@ outra ferramenta) e reaproveitar o `ingest`.
 | `scan.Manifest` | Lê o `system-graph.yml` |
 | `ingest.GraphIngestor` | Grava no Neo4j |
 | `runtime.KafkaRuntimeInspector` | Lê consumer groups via `AdminClient` |
-| `crawl.CrawlConfig`, `crawl.Crawler` | Lê o `crawl.yml` e roda git, build e extração projeto a projeto |
+| `crawl.CrawlConfig`, `crawl.Crawler` | Lê o arquivo de crawl e roda git, build e extração projeto a projeto |
 | `crawl.GitSync`, `crawl.BuildRunner`, `crawl.CommandRunner` | Clone/pull, escolha do comando de build, processos com timeout e log |
 | `experimental.source.SourceOnlyAnnotationSource` | Anotações lidas só do código-fonte, sem compilar |
 | `experimental.jar.JarProject` | Abre um jar (fat jar ou comum), bibliotecas selecionadas e `-sources.jar` |

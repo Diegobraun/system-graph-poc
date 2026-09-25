@@ -23,16 +23,72 @@ services:
       timeout: 10s
       retries: 20
 
-  neo4j:
+  neo4j-contas:
     image: neo4j:5.26-community
-    container_name: sgp-neo4j
+    container_name: sgp-neo4j-contas
     ports:
       - "7474:7474"
       - "7687:7687"
     environment:
       NEO4J_AUTH: neo4j/password123
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 128m
     volumes:
-      - neo4j-data:/data
+      - neo4j-contas:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  neo4j-credito:
+    image: neo4j:5.26-community
+    container_name: sgp-neo4j-credito
+    ports:
+      - "7475:7474"
+      - "7688:7687"
+    environment:
+      NEO4J_AUTH: neo4j/password123
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 128m
+    volumes:
+      - neo4j-credito:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  neo4j-pagamentos:
+    image: neo4j:5.26-community
+    container_name: sgp-neo4j-pagamentos
+    ports:
+      - "7476:7474"
+      - "7689:7687"
+    environment:
+      NEO4J_AUTH: neo4j/password123
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 128m
+    volumes:
+      - neo4j-pagamentos:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  neo4j-hub:
+    image: neo4j:5.26-community
+    container_name: sgp-neo4j-hub
+    ports:
+      - "7477:7474"
+      - "7690:7687"
+    environment:
+      NEO4J_AUTH: neo4j/password123
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 128m
+    volumes:
+      - neo4j-hub:/data
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
       interval: 5s
@@ -40,4 +96,7 @@ services:
       retries: 30
 
 volumes:
-  neo4j-data:
+  neo4j-contas:
+  neo4j-credito:
+  neo4j-pagamentos:
+  neo4j-hub:

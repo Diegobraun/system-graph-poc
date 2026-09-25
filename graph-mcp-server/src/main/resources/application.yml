@@ -1,5 +1,5 @@
 server:
-  port: 8090
+  port: ${SERVER_PORT:8090}
 
 spring:
   application:
@@ -24,7 +24,15 @@ spring:
           Before changing any REST endpoint, response DTO, Kafka event or payload class, call impact_of_change.
           When working on a service for the first time, call service_overview.
           Record confirmed business rules or gotchas with record_note.
+          The company is split in areas, each with its own graph. When impact_of_change returns affectedAreas,
+          tell the user which teams of those areas must agree with the change before it ships.
 
 graph:
+  area: ${GRAPH_AREA:}
+  links: ${GRAPH_LINKS:}
+  hub:
+    uri: ${GRAPH_HUB_URI:}
+    user: ${GRAPH_HUB_USER:neo4j}
+    password: ${GRAPH_HUB_PASSWORD:password123}
   query-timeout: 5s
   max-rows: 200

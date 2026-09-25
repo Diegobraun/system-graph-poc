@@ -1,0 +1,25 @@
+area: pagamentos
+team: PIX
+workspace: ../..
+output: ../.system-graph/pagamentos
+
+neo4j:
+  uri: bolt://localhost:7689
+hub:
+  uri: bolt://localhost:7690
+
+defaults:
+  pull: true
+  build: auto
+  offline: true
+  buildTimeoutMinutes: 10
+
+projects:
+  - git: https://github.com/Diegobraun/system-graph-payment-service.git
+  - git: https://github.com/Diegobraun/system-graph-fraud-service.git
+    team: Prevenção a Fraude
+  - git: https://github.com/Diegobraun/system-graph-notification-service.git
+    team: Comunicação
+
+kafka:
+  bootstrap: localhost:9092

@@ -15,19 +15,14 @@ import org.neo4j.driver.types.Node;
 import org.neo4j.driver.types.Path;
 import org.neo4j.driver.types.Point;
 import org.neo4j.driver.types.Relationship;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
 
-@Component
 public class GraphClient {
 
     private final Driver driver;
     private final TransactionConfig readConfig;
     private final int maxRows;
 
-    public GraphClient(Driver driver,
-                       @Value("${graph.query-timeout:5s}") Duration timeout,
-                       @Value("${graph.max-rows:200}") int maxRows) {
+    public GraphClient(Driver driver, Duration timeout, int maxRows) {
         this.driver = driver;
         this.readConfig = TransactionConfig.builder().withTimeout(timeout).build();
         this.maxRows = maxRows;

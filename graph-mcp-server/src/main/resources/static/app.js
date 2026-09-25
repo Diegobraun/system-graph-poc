@@ -1,4 +1,6 @@
-const state = { map: null, issues: [], services: new Map(), cy: null, activeIssue: null };
+const state = { map: null, issues: [], services: new Map(), cy: null, activeIssue: null, context: { area: null, areas: [], links: {} }, areaNames: [] };
+
+const AREA_COLORS = ["#38bdf8", "#a3e635", "#f0abfc", "#fbbf24", "#2dd4bf", "#fb923c"];
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -6,6 +8,22 @@ const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&
 
 const serviceId = (name) => "s:" + name;
 const topicId = (name) => "t:" + name;
+const areaId = (name) => "a:" + name;
+
+function areaColor(area) {
+  const index = state.areaNames.indexOf(area);
+  return index < 0 ? color("ghost") : AREA_COLORS[index % AREA_COLORS.length];
+}
+
+function areaBadge(area) {
+  if (!area) return "";
+  return `<span class="badge area" style="--c: ${areaColor(area)}">${esc(area)}</span>`;
+}
+
+function serviceRef(name, area) {
+  const known = area ?? state.services.get(name)?.area;
+  return serviceButton(name) + (known && known !== state.context.area ? areaBadge(known) : "");
+}
 
 async function getJson(url) {
   const response = await fetch(url);
@@ -52,6 +70,13 @@ function topicButton(name) {
 function buildElements(map) {
   const elements = [];
   const nodeIds = new Set();
+  const areas = [...new Set(map.services.map((s) => s.area).filter(Boolean))];
+  for (const area of areas) {
+    const classes = ["area"];
+    if (state.context.area === area) classes.push("home");
+    else if (state.context.area) classes.push("foreign");
+    elements.push({ data: { id: areaId(area), label: area, kind: "area", name: area, color: areaColor(area) }, classes: classes.join(" ") });
+  }
   const addService = (name) => {
     if (nodeIds.has(serviceId(name))) {
       return;
@@ -59,9 +84,12 @@ function buildElements(map) {
     const service = state.services.get(name) ?? { name, indexed: false };
     nodeIds.add(serviceId(name));
     const classes = ["service"];
-    if (!service.indexed && !service.contractSource) classes.push("ghost");
+    if (service.external) classes.push("external");
+    else if (!service.indexed && !service.contractSource) classes.push("ghost");
     if (service.contractSource) classes.push("contract");
-    elements.push({ data: { id: serviceId(name), label: name, kind: "service", name, w: Math.max(90, name.length * 7.6 + 28) }, classes: classes.join(" ") });
+    const data = { id: serviceId(name), label: name, kind: "service", name, w: Math.max(90, name.length * 7.6 + 28), color: areaColor(service.area) };
+    if (service.area) data.parent = areaId(service.area);
+    elements.push({ data, classes: classes.join(" ") });
   };
   map.services.forEach((s) => addService(s.name));
   map.topics.forEach((t) => {
@@ -151,6 +179,25 @@ function cyStyle() {
       selector: "node.service.contract",
       style: { "background-fill": "solid", "background-color": color("service"), "background-opacity": 0.12, "border-color": color("service"), "border-opacity": 1, "border-width": 1.5, color: color("text") },
     },
+    {
+      selector: "node.service.external",
+      style: {
+        "background-fill": "solid", "background-color": "data(color)", "background-opacity": 0.1, "border-width": 1.5, "border-style": "solid",
+        "border-color": "data(color)", "border-opacity": 0.75, color: color("text"),
+      },
+    },
+    {
+      selector: "node.area",
+      style: {
+        shape: "round-rectangle", "background-color": "data(color)", "background-opacity": 0.04, "border-width": 1, "border-style": "dashed",
+        "border-color": "data(color)", "border-opacity": 0.4, padding: 34, label: "data(label)", "text-transform": "uppercase",
+        "text-valign": "top", "text-halign": "center", "text-margin-y": -6, color: "data(color)", "font-size": 12.5, "font-weight": 700,
+        "text-opacity": 0.85,
+      },
+    },
+    { selector: "node.area.home", style: { "background-opacity": 0.075, "border-style": "solid", "border-opacity": 0.65, "border-width": 1.2 } },
+    { selector: "node.area.foreign", style: { "background-opacity": 0.025, "border-opacity": 0.3, "text-opacity": 0.6 } },
+    { selector: "node.area.hover, node.area.focus", style: { "outline-width": 0, "border-opacity": 0.9 } },
     {
       selector: "node.topic",
       style: {
@@ -247,17 +294,17 @@ function animateFlow() {
       const breathe = still ? 0 : Math.sin(time / 1400);
       glow.globalCompositeOperation = "lighter";
       cy.nodes(":visible").forEach((n) => {
-        if (n.hasClass("ghost")) return;
+        if (n.hasClass("ghost") || n.isParent()) return;
         const alpha = n.numericStyle("opacity");
         if (alpha < 0.02) return;
         const p = n.renderedPosition();
         const boost = n.hasClass("hover") ? 1.5 : n.hasClass("focus") ? 1.25 : 1;
         const issue = n.hasClass("issue-error") ? palette.error : n.hasClass("issue-warning") ? palette.warning : null;
-        const base = issue ?? (n.hasClass("topic") ? palette.topic : palette.service);
+        const base = issue ?? (n.hasClass("topic") ? palette.topic : n.hasClass("external") ? n.data("color") : palette.service);
         const radius = (Math.max(n.renderedWidth(), n.renderedHeight()) * 0.85 + 26 * zoom) * boost * (1 + breathe * 0.05);
         const gradient = glow.createRadialGradient(p.x, p.y, 0, p.x, p.y, radius);
         gradient.addColorStop(0, rgba(base, 0.38 * alpha * boost));
-        gradient.addColorStop(0.45, rgba(n.hasClass("topic") || issue ? base : palette["service-2"], 0.12 * alpha * boost));
+        gradient.addColorStop(0.45, rgba(n.hasClass("topic") || n.hasClass("external") || issue ? base : palette["service-2"], 0.12 * alpha * boost));
         gradient.addColorStop(1, rgba(base, 0));
         glow.fillStyle = gradient;
         glow.beginPath();
@@ -308,7 +355,7 @@ function animateFlow() {
 }
 
 function matchAspect(cy) {
-  const nodes = cy.nodes();
+  const nodes = cy.nodes(":childless");
   if (nodes.length < 3) return;
   const box = nodes.boundingBox();
   const target = cy.width() / Math.max(cy.height(), 1);
@@ -323,15 +370,70 @@ function matchAspect(cy) {
   }));
 }
 
+function arrangeAreas(cy) {
+  const parents = cy.nodes(":parent");
+  if (parents.empty()) return false;
+  const units = [];
+  parents.forEach((p) => units.push({ nodes: p.children(), pad: 46 }));
+  cy.nodes(":childless").filter((n) => !n.isChild()).forEach((n) => units.push({ nodes: n, pad: 16 }));
+  const box = (u) => {
+    const b = u.nodes.boundingBox();
+    return { x1: b.x1 - u.pad, y1: b.y1 - u.pad, x2: b.x2 + u.pad, y2: b.y2 + u.pad };
+  };
+  const shift = (u, dx, dy) => u.nodes.forEach((n) => {
+    const p = n.position();
+    n.position({ x: p.x + dx, y: p.y + dy });
+  });
+  cy.batch(() => {
+    const all = cy.nodes(":childless").boundingBox();
+    const target = cy.width() / Math.max(cy.height(), 1);
+    const sx = Math.min(2.4, Math.max(0.5, Math.sqrt(target / (all.w / Math.max(all.h, 1)))));
+    const cx = (all.x1 + all.x2) / 2;
+    const cyc = (all.y1 + all.y2) / 2;
+    units.forEach((u) => {
+      const b = box(u);
+      const ux = (b.x1 + b.x2) / 2;
+      const uy = (b.y1 + b.y2) / 2;
+      shift(u, (ux - cx) * (sx - 1), (uy - cyc) * (1 / sx - 1));
+    });
+    for (let iteration = 0; iteration < 200; iteration++) {
+      let moved = false;
+      for (let i = 0; i < units.length; i++) {
+        for (let j = i + 1; j < units.length; j++) {
+          const a = box(units[i]);
+          const b = box(units[j]);
+          const ox = Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1);
+          const oy = Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1);
+          if (ox <= 0 || oy <= 0) continue;
+          moved = true;
+          const dirX = (a.x1 + a.x2) / 2 <= (b.x1 + b.x2) / 2 ? -1 : 1;
+          const dirY = (a.y1 + a.y2) / 2 <= (b.y1 + b.y2) / 2 ? -1 : 1;
+          const heavy = (u) => (u.nodes.length > 1 ? 1 : 0);
+          const share = heavy(units[i]) === heavy(units[j]) ? 0.5 : heavy(units[i]) ? 0.2 : 0.8;
+          if (ox * target < oy) {
+            shift(units[i], dirX * (ox + 2) * share, 0);
+            shift(units[j], -dirX * (ox + 2) * (1 - share), 0);
+          } else {
+            shift(units[i], 0, dirY * (oy + 2) * share);
+            shift(units[j], 0, -dirY * (oy + 2) * (1 - share));
+          }
+        }
+      }
+      if (!moved) break;
+    }
+  });
+  return true;
+}
+
 function intro(cy) {
-  matchAspect(cy);
+  if (!arrangeAreas(cy)) matchAspect(cy);
   cy.fit(undefined, 70);
   if (reducedMotion() || cy.nodes().empty()) return;
   const zoom = cy.zoom();
   const pan = { ...cy.pan() };
   const box = cy.nodes().boundingBox();
   const center = { x: (box.x1 + box.x2) / 2, y: (box.y1 + box.y2) / 2 };
-  const nodes = cy.nodes().sort((a, b) => b.degree() - a.degree());
+  const nodes = cy.nodes(":childless").sort((a, b) => b.degree() - a.degree());
   const targets = new Map(nodes.map((n) => [n.id(), { ...n.position() }]));
   cy.batch(() => {
     nodes.forEach((n) => n.position({ x: center.x + (Math.random() - 0.5) * 60, y: center.y + (Math.random() - 0.5) * 60 }));
@@ -344,6 +446,7 @@ function intro(cy) {
   nodes.forEach((n, i) => n.delay(200 + i * 90).animate(
     { position: targets.get(n.id()), style: { opacity: 1 } }, { duration: 1300, easing: "ease-out-cubic" }));
   const edgesAt = 900 + nodes.length * 90;
+  cy.nodes(":parent").delay(700 + nodes.length * 60).animate({ style: { opacity: 1 } }, { duration: 1200, easing: "ease-in-out-sine" });
   cy.edges().delay(edgesAt).animate({ style: { opacity: 0.8 } }, { duration: 900, easing: "ease-in-out-sine" });
   setTimeout(() => { if (!cy.destroyed()) cy.elements().removeStyle("opacity"); }, edgesAt + 1000);
 }
@@ -401,8 +504,9 @@ function focus(nodeIds, edgeIds) {
   } else {
     keep = keep.union(keep.nodes().edgesWith(keep.nodes()));
   }
+  keep = keep.union(keep.nodes().parents());
   cy.elements().not(keep).addClass("faded");
-  keep.addClass("focus");
+  keep.not(":parent").addClass("focus");
 }
 
 function applyFilters() {
@@ -415,10 +519,53 @@ function applyFilters() {
 
 function renderStats() {
   const indexed = state.map.services.filter((s) => s.indexed).length;
+  const external = state.map.services.filter((s) => s.external).length;
   const errors = state.issues.filter((i) => i.severity === "error").length;
   const warnings = state.issues.filter((i) => i.severity === "warning").length;
-  $("#stats").textContent = `${indexed} serviços indexados · ${state.map.topics.length} tópicos · ${errors} erros · ${warnings} avisos`;
+  const scope = state.context.area ? `${indexed} serviços na área · ${external} de outras áreas` : `${indexed} serviços indexados`;
+  $("#stats").textContent = `${scope} · ${state.map.topics.length} tópicos · ${errors} erros · ${warnings} avisos`;
   $("#issue-count").textContent = errors + warnings || "";
+}
+
+function renderContext() {
+  const { area, areas, links } = state.context;
+  const chip = $("#area-chip");
+  chip.hidden = !area && !areas.length;
+  chip.textContent = area ? "área " + area : "empresa";
+  chip.style.setProperty("--c", area ? areaColor(area) : color("accent"));
+  const entries = Object.entries(links ?? {});
+  $("#area-nav").hidden = entries.length < 2;
+  $("#area-nav").innerHTML = entries.map(([name, url]) => {
+    const current = name === (area ?? "empresa");
+    const tint = name === "empresa" ? color("accent") : areaColor(name);
+    return `<a href="${esc(url)}" class="${current ? "current" : ""}" style="--c: ${tint}">${esc(name)}</a>`;
+  }).join("");
+  document.title = area ? `System Graph · ${area}` : "System Graph";
+}
+
+function areaInfo(name) {
+  return (state.context.areas ?? []).find((a) => a.area === name) ?? { area: name, teams: [], services: [], callsAreas: [] };
+}
+
+function showArea(name) {
+  const info = areaInfo(name);
+  const members = state.map.services.filter((s) => s.area === name);
+  const crossing = state.map.calls.filter((c) => {
+    const from = state.services.get(c.source)?.area;
+    const to = state.services.get(c.target)?.area;
+    return from && to && from !== to && (from === name || to === name);
+  });
+  const home = name === state.context.area;
+  $("#details").innerHTML = `
+    <h2>${esc(name)}</h2>
+    <div class="meta">${areaBadge(name)}${home ? `<span class="badge">esta área</span>` : state.context.area ? `<span class="badge">outra área</span>` : ""}</div>
+    ${section("Times", info.teams, (t) => `<div>${esc(t)}</div>`)}
+    ${section("Serviços", members, (s) => `<div class="row">${serviceButton(s.name)}${s.external ? `<span class="muted">detalhe no MCP da área</span>` : ""}</div>
+      <div class="sub">${esc(s.team ?? "")}</div>`)}
+    ${section("Chamadas entre áreas", crossing, (c) => `<div class="row">${serviceRef(c.source)}<span class="muted">→</span>${serviceRef(c.target)}</div>
+      <div class="sub">${esc((c.protocols.length ? c.protocols : ["http"]).join(", "))} · ${esc(c.operations)} operação(ões)</div>`)}
+    ${info.callsAreas?.length ? `<p class="guidance">Usa ${esc(info.contractsUsedFromOtherAreas)} contrato(s) de ${info.callsAreas.map(areaBadge).join(" ")}</p>` : ""}
+    ${!home && state.context.area ? `<p class="muted">Aqui aparecem só os serviços desta área que falam com ${esc(state.context.area)}. O resto está no grafo da própria área.</p>` : ""}`;
 }
 
 function renderIssues() {
@@ -470,7 +617,9 @@ async function showService(name) {
   }
   const service = state.services.get(name) ?? {};
   const badges = [
-    data.indexed ? `<span class="badge">indexado</span>` : data.contractSource ? "" : `<span class="badge warning">não indexado</span>`,
+    areaBadge(data.area),
+    data.team ? `<span class="badge">${esc(data.team)}</span>` : "",
+    data.origin === "hub" ? `<span class="badge">via hub</span>` : data.indexed ? `<span class="badge">indexado</span>` : data.contractSource ? "" : `<span class="badge warning">não indexado</span>`,
     data.contractSource ? `<span class="badge">contrato ${esc(data.contractSource)}</span>` : "",
     data.graphqlSchema ? `<span class="badge graphql">GraphQL</span>` : "",
     data.commitSha ? `<span class="badge mono">${esc(data.commitSha)}</span>` : "",
@@ -478,19 +627,20 @@ async function showService(name) {
   $("#details").innerHTML = `
     <h2>${esc(name)}</h2>
     <div class="meta">${badges}</div>
-    <div>${repositoryLink(service)}</div>
+    <div>${repositoryLink(service.repository ? service : data)}</div>
+    ${data.origin === "hub" ? `<p class="guidance">Serviço da área ${esc(data.area)}. O hub só guarda os contratos e as chamadas entre áreas; as chamadas internas de ${esc(data.area)} estão no grafo daquela área.</p>` : ""}
     ${section("Expõe", data.exposes, (e) => `
       <div class="row">${protocolBadge(e.protocol)}<span class="mono">${esc(endpointLabel(e))}</span>${e.source === "openapi" ? `<span class="badge">openapi</span>` : ""}</div>
-      <div class="sub">${e.calledBy.length ? "chamado por " + e.calledBy.map(serviceButton).join(", ") : "nenhum chamador conhecido"}</div>`)}
+      <div class="sub">${e.calledBy.length ? "chamado por " + e.calledBy.map((n) => serviceRef(n)).join(", ") : "nenhum chamador conhecido"}</div>`)}
     ${section("Chama", data.calls, (c) => `
-      <div class="row">${protocolBadge(c.protocol)}<span class="mono">${esc(endpointLabel(c))}</span><span class="muted">em</span>${serviceButton(c.service)}</div>
+      <div class="row">${protocolBadge(c.protocol)}<span class="mono">${esc(endpointLabel(c))}</span><span class="muted">em</span>${serviceRef(c.service)}</div>
       <div class="sub">${esc(c.via)} · confiança ${esc(c.confidence)} · ${sourceLink(name, c.location)}</div>`)}
     ${section("Publica", data.publishes, (p) => `
       <div class="row"><span class="badge kafka">Kafka</span>${topicButton(p.topic)}</div>
-      <div class="sub">${esc(p.via)} · ${esc(p.payloadType)}${p.consumers.length ? " · consumido por " + p.consumers.map(serviceButton).join(", ") : ""}</div>`)}
+      <div class="sub">${esc(p.via)} · ${esc(p.payloadType)}${p.consumers.length ? " · consumido por " + p.consumers.map((n) => serviceRef(n)).join(", ") : ""}</div>`)}
     ${section("Consome", data.consumes, (c) => `
       <div class="row"><span class="badge kafka">Kafka</span>${topicButton(c.topic)}</div>
-      <div class="sub">${esc(c.via)} · grupo ${esc(c.group ?? "-")} · ${esc(c.payloadType)}${c.producers.length ? " · publicado por " + c.producers.map(serviceButton).join(", ") : ""}</div>`)}
+      <div class="sub">${esc(c.via)} · grupo ${esc(c.group ?? "-")} · ${esc(c.payloadType)}${c.producers.length ? " · publicado por " + c.producers.map((n) => serviceRef(n)).join(", ") : ""}</div>`)}
     ${section("Chamadas vistas em runtime", data.observedCalls, (o) => `
       <div class="row"><span class="badge runtime">${esc(o.source)}</span>${serviceButton(o.service)}${o.count ? `<span class="muted">${esc(o.count)}×</span>` : ""}</div>`)}
     ${section("Chamado em runtime por", data.observedCallers, (o) => `
@@ -509,10 +659,10 @@ async function showTopic(name) {
     <h2>${esc(name)}</h2>
     <div class="meta"><span class="badge kafka">tópico Kafka</span></div>
     ${section("Produtores", data.producers, (p) => `
-      <div class="row">${serviceButton(p.service)}<span class="muted">${esc(p.via)}</span></div>
+      <div class="row">${serviceRef(p.service, p.area)}<span class="muted">${esc(p.via)}</span></div>
       <div class="sub">${esc(p.payloadType)} · ${sourceLink(p.service, p.location)}</div>`)}
     ${section("Consumidores declarados no código", data.declaredConsumers, (c) => `
-      <div class="row">${serviceButton(c.service)}<span class="muted">${esc(c.via)} · grupo ${esc(c.group ?? "-")}</span></div>
+      <div class="row">${serviceRef(c.service, c.area)}<span class="muted">${esc(c.via)} · grupo ${esc(c.group ?? "-")}</span></div>
       <div class="sub">${esc(c.payloadType)} · ${sourceLink(c.service, c.location)}</div>`)}
     ${section("Vistos no Kafka", data.observedConsumers, (o) => `
       <div class="row">${serviceButton(o.service)}<span class="muted">${esc(o.activeMembers)} membros · ${esc(o.state)}</span></div>`)}
@@ -566,14 +716,14 @@ function renderImpact(result) {
   let body = "";
   if (result.kind === "kafka-topic") {
     body = section("Serviços afetados", result.affectedServices, (a) => `
-      <div class="row">${serviceButton(a.service)}${a.seenInKafka ? `<span class="badge runtime">visto no Kafka</span>` : ""}</div>
+      <div class="row">${serviceRef(a.service, a.area)}${a.seenInKafka ? `<span class="badge runtime">visto no Kafka</span>` : ""}</div>
       <div class="sub">${a.declaredIn ? `${esc(a.payloadType)} · ${sourceLink(a.service, a.declaredIn)}` : "não declarado no código"}</div>`)
       + section("Produtores", result.producers, (p) => `<div class="row">${serviceButton(p.service)}</div>`)
       + section("Problemas de payload", (result.schemaIssues ?? []).filter((s) => s.severity !== "info"), (s) => `
       <div class="row"><span class="badge ${esc(s.severity)}">${esc(s.severity)}</span></div><div>${esc(s.problem)}</div>`);
   } else if (result.kind === "graphql-field") {
     body = section("Clients que selecionam o campo", result.affectedServices, (a) => `
-      <div class="row">${serviceButton(a.service)}<span class="muted">${esc((a.operations ?? []).join(", "))}</span></div>
+      <div class="row">${serviceRef(a.service, a.area)}<span class="muted">${esc((a.operations ?? []).join(", "))}</span></div>
       <div class="sub">${sourceLink(a.service, a.location)}</div>`)
       + section("Outros clients GraphQL (não usam o campo)", result.otherGraphQlClients, (a) => `
       <div class="row">${serviceButton(a.service)}</div><div class="sub">${esc(a.reason)}</div>`);
@@ -581,17 +731,26 @@ function renderImpact(result) {
     body = (result.endpoints ?? []).map((e) => `
       <h3 class="mono">${esc(e.method)} ${esc(e.path)}</h3>
       ${e.callers.length ? `<ul class="list">${e.callers.map((c) => `<li>
-        <div class="row">${serviceButton(c.service)}<span class="muted">${esc(c.via)} · confiança ${esc(c.confidence)}</span></div>
+        <div class="row">${serviceRef(c.service, c.area)}<span class="muted">${esc(c.via)} · confiança ${esc(c.confidence)}</span></div>
         <div class="sub">${sourceLink(c.service, c.location)}</div>
         ${c.fieldsUsed?.length ? `<div class="sub">campos usados: <span class="mono">${esc(c.fieldsUsed.join(", "))}</span></div>` : ""}
         ${c.documentErrors?.length ? `<div class="sub alert">${esc(c.documentErrors.join("; "))}</div>` : ""}
       </li>`).join("")}</ul>` : `<p class="muted">Nenhum chamador conhecido.</p>`}`).join("");
   }
   const affected = affectedFromImpact(result);
+  const areas = result.affectedAreas ?? [];
+  const areasBlock = areas.length ? `
+    <div class="areas-alert">
+      <div class="row"><strong>Afeta ${areas.length} outra(s) área(s)</strong></div>
+      <ul class="list">${areas.map((a) => `<li><div class="row">${areaBadge(a.area)}<span>${esc(a.teams.join(", ") || "time não informado")}</span></div>
+        <div class="sub">${a.services.map((n) => serviceButton(n)).join(", ")}</div></li>`).join("")}</ul>
+      <div class="sub">Combine a mudança com esses times antes de publicar.</div>
+    </div>` : "";
   $("#details").innerHTML = `
     <h2>Impacto: ${esc(result.contract)}</h2>
-    <div class="meta"><span class="badge">${esc(result.kind)}</span><span class="badge">dono ${esc(result.service)}</span>
+    <div class="meta"><span class="badge">${esc(result.kind)}</span><span class="badge">dono ${esc(result.service)}</span>${areaBadge(result.ownerArea)}
       <span class="badge ${affected.length ? "warning" : ""}">${affected.length} serviço(s) afetado(s)</span></div>
+    ${areasBlock}
     ${body || `<p class="muted">Nenhum serviço afetado.</p>`}
     ${result.guidance ? `<p class="guidance">${esc(result.guidance)}</p>` : ""}
     ${notes(result.notes)}`;
@@ -639,22 +798,36 @@ function switchTab(tab) {
 function renderWelcome() {
   const problems = state.issues.filter((i) => i.severity === "error" || i.severity === "warning");
   const links = state.map.calls.length + state.map.publishes.length + state.map.consumes.length + state.map.observedCalls.length;
+  const area = state.context.area;
+  const areas = state.context.areas ?? [];
+  const title = area ? `Área ${area}` : areas.length ? "Mapa da empresa" : "Mapa dos serviços";
+  const subtitle = area
+    ? `Detalhe completo dos serviços de ${area}. Os serviços de outras áreas aparecem só quando falam com esta, e vêm do hub.`
+    : areas.length
+      ? "Cada área mantém o próprio grafo. Aqui ficam os contratos publicados e as chamadas entre áreas."
+      : "Clique num serviço, tópico ou conexão. Escolha um serviço e um contrato no topo para ver quem sente a mudança.";
   $("#details").innerHTML = `
-    <h2 class="hero">Mapa dos serviços</h2>
-    <p class="hero-sub">Clique num serviço, tópico ou conexão. Escolha um serviço e um contrato no topo para ver quem sente a mudança.</p>
+    <h2 class="hero">${esc(title)}</h2>
+    <p class="hero-sub">${esc(subtitle)}</p>
     <div class="kpis">
       <div class="kpi"><b>${state.map.services.filter((s) => s.indexed).length}</b><small>serviços</small></div>
       <div class="kpi"><b>${links}</b><small>conexões</small></div>
       <div class="kpi ${problems.length ? "alert-kpi" : ""}"><b>${problems.length}</b><small>problemas</small></div>
     </div>
-    ${section("Serviços", state.map.services, (s) => `
-      <div class="row">${serviceButton(s.name)}${s.indexed ? "" : s.contractSource ? `<span class="badge">${esc(s.contractSource)}</span>` : `<span class="badge warning">não indexado</span>`}${s.graphql ? `<span class="badge graphql">GraphQL</span>` : ""}</div>
-      <div class="sub">${repositoryLink(s)}</div>`)}
+    ${!area && areas.length ? section("Áreas", areas, (a) => `
+      <div class="row"><button type="button" class="link" data-area="${esc(a.area)}">${esc(a.area)}</button>${areaBadge(a.area)}<span class="muted">${esc(a.services.length)} serviço(s)</span></div>
+      <div class="sub">${esc(a.teams.join(", "))}</div>`) : ""}
+    ${section("Serviços", state.map.services.filter((s) => !area || s.area === area || !s.external), (s) => `
+      <div class="row">${serviceRef(s.name)}${s.indexed || s.external ? "" : s.contractSource ? `<span class="badge">${esc(s.contractSource)}</span>` : `<span class="badge warning">não indexado</span>`}${s.graphql ? `<span class="badge graphql">GraphQL</span>` : ""}</div>
+      <div class="sub">${s.team ? esc(s.team) + " · " : ""}${repositoryLink(s)}</div>`)}
     ${problems.length ? `<p class="guidance">${problems.length} problema(s) de contrato. Veja a aba Problemas.</p>` : ""}`;
 }
 
 async function load() {
-  const [map, issues] = await Promise.all([getJson("api/map"), getJson("api/issues")]);
+  const [map, issues, context] = await Promise.all([getJson("api/map"), getJson("api/issues"), getJson("api/context")]);
+  state.context = { area: context.area, areas: context.areas ?? [], links: context.links ?? {} };
+  state.areaNames = [...new Set([...state.context.areas.map((a) => a.area), ...map.services.map((s) => s.area).filter(Boolean)])].sort();
+  renderContext();
   state.map = map;
   state.issues = issues.issues ?? [];
   state.services = new Map(map.services.map((s) => [s.name, s]));
@@ -671,7 +844,7 @@ async function load() {
     maxZoom: 1.7,
     layout: {
       name: "cose", animate: false, padding: 40, randomize: true, nodeDimensionsIncludeLabels: true, componentSpacing: 80,
-      nodeRepulsion: (n) => (n.hasClass("topic") ? 900000 : 2600000), nodeOverlap: 60,
+      nodeRepulsion: (n) => (n.hasClass("topic") ? 900000 : 2600000), nodeOverlap: 60, nestingFactor: 0.7, gravityCompound: 3, gravityRangeCompound: 1.2,
       idealEdgeLength: (e) => 90 + 22 * Math.min(e.source().degree(), e.target().degree()),
       edgeElasticity: (e) => (e.hasClass("runtime") ? 40 : 110), gravity: 1.4, gravityRange: 2.4, numIter: 4000, coolingFactor: 0.97,
     },
@@ -689,8 +862,10 @@ async function load() {
   state.cy.on("tap", "node", (evt) => {
     const d = evt.target.data();
     switchTab("details");
-    focus([evt.target.id()], evt.target.connectedEdges().map((e) => e.id()));
+    if (evt.target.isParent()) focus(evt.target.children().map((n) => n.id()), evt.target.children().connectedEdges().map((e) => e.id()));
+    else focus([evt.target.id()], evt.target.connectedEdges().map((e) => e.id()));
     if (d.kind === "service") showService(d.name);
+    else if (d.kind === "area") showArea(d.name);
     else showTopic(d.name);
   });
   state.cy.on("tap", "edge", (evt) => {
@@ -712,15 +887,22 @@ async function load() {
   renderWelcome();
   const select = $("#impact-service");
   const current = select.value;
-  select.innerHTML = `<option value="">serviço…</option>` + map.services.filter((s) => s.indexed || s.contractSource)
+  select.innerHTML = `<option value="">serviço…</option>` + map.services.filter((s) => s.indexed || s.contractSource || s.external)
     .map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
   if (current && state.services.has(current)) select.value = current;
 }
 
 document.addEventListener("click", (evt) => {
-  const target = evt.target.closest("[data-service], [data-topic], [data-impact-topic]");
+  const target = evt.target.closest("[data-service], [data-topic], [data-impact-topic], [data-area]");
   if (!target) return;
-  if (target.dataset.service) {
+  if (target.dataset.area) {
+    const node = state.cy.getElementById(areaId(target.dataset.area));
+    if (node.nonempty()) {
+      focus(node.children().map((n) => n.id()), node.children().connectedEdges().map((e) => e.id()));
+      state.cy.animate({ fit: { eles: node, padding: 90 }, duration: 850, easing: "ease-in-out-cubic" });
+    }
+    showArea(target.dataset.area);
+  } else if (target.dataset.service) {
     const node = state.cy.getElementById(serviceId(target.dataset.service));
     if (node.nonempty()) focus([node.id()], node.connectedEdges().map((e) => e.id()));
     switchTab("details");

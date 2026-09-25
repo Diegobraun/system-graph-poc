@@ -1,0 +1,23 @@
+area: credito
+team: Crédito
+workspace: ../..
+output: ../.system-graph/credito
+
+neo4j:
+  uri: bolt://localhost:7688
+hub:
+  uri: bolt://localhost:7690
+
+defaults:
+  pull: true
+  build: auto
+  offline: true
+  buildTimeoutMinutes: 10
+
+projects:
+  - git: https://github.com/Diegobraun/system-graph-loan-service.git
+  - git: https://github.com/Diegobraun/system-graph-investment-service.git
+    team: Investimentos
+
+kafka:
+  bootstrap: localhost:9092

@@ -58,6 +58,10 @@ public final class ObservedCallsImporter {
     }
 
     public static void write(Neo4jSettings settings, String source, List<ObservedCall> calls) {
+        write(settings, source, calls, false);
+    }
+
+    public static void write(Neo4jSettings settings, String source, List<ObservedCall> calls, boolean onlyIndexed) {
         List<Map<String, Object>> rows = calls.stream().map(call -> {
             Map<String, Object> row = new HashMap<>();
             row.put("from", call.from());
@@ -71,13 +75,15 @@ public final class ObservedCallsImporter {
                 tx.run("MATCH ()-[r:OBSERVED_CALLS {source: $source}]->() DELETE r", Map.of("source", source));
                 tx.run("""
                         UNWIND $rows AS row
+                        WITH row
+                        WHERE NOT $onlyIndexed OR EXISTS { MATCH (s:Service {indexed: true}) WHERE s.name IN [row.from, row.to] }
                         MERGE (a:Service {name: row.from})
                         ON CREATE SET a.indexed = false
                         MERGE (b:Service {name: row.to})
                         ON CREATE SET b.indexed = false
                         MERGE (a)-[r:OBSERVED_CALLS {source: $source}]->(b)
                         SET r.count = row.count, r.observedAt = datetime()
-                        """, Map.of("source", source, "rows", rows));
+                        """, Map.of("source", source, "rows", rows, "onlyIndexed", onlyIndexed));
             });
         }
     }

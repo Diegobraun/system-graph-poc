@@ -8,14 +8,15 @@ O grafo gerado é o mesmo do modo CI. O MCP server e as tools não mudam.
 
 ```mermaid
 flowchart LR
-    CFG["crawl.yml<br/>lista de projetos"] --> C["graph-extractor crawl"]
+    CFG["areas/&lt;área&gt;.yml<br/>lista de projetos"] --> C["graph-extractor crawl"]
     subgraph loop["para cada projeto"]
         G["git clone / pull --ff-only"] --> B["build<br/>mvn compile ou gradle classes"]
         B --> X["extract"]
     end
     C --> loop
     X --> J[".system-graph/&lt;serviço&gt;.json"]
-    J --> I["ingest"] --> N[("Neo4j")]
+    J --> I["ingest"] --> N[("Neo4j da área")]
+    I --> H[("Neo4j hub")]
     C --> K["kafka-runtime<br/>opcional"] --> N
     N --> MCP["graph-mcp-server"]
 ```
@@ -33,9 +34,9 @@ java -jar graph-extractor.jar crawl --config crawl.yml
 | `--no-pull` | Não faz `git pull`, usa o que está no disco |
 | `--no-build` | Não compila, usa o `target/classes` que já existe |
 | `--no-ingest` | Só gera os JSONs, não grava no Neo4j |
-| `--neo4j-uri`, `--neo4j-user`, `--neo4j-password` | Conexão, igual aos outros comandos |
+| `--neo4j-uri`, `--neo4j-user`, `--neo4j-password` | Conexão, igual aos outros comandos. Sobrescreve o `neo4j:` do arquivo |
 
-Nesta POC, `scripts/refresh-graph.sh` é só um atalho para `crawl --config crawl.yml`.
+Nesta POC, `scripts/refresh-graph.sh` roda `crawl --config areas/<área>.yml` para cada área.
 
 Saída de exemplo:
 
@@ -63,7 +64,7 @@ mesmo assim.
 
 ## crawl.yml
 
-O desta POC ([`crawl.yml`](../crawl.yml)) aponta para os sete serviços no GitHub. Um exemplo mais próximo de
+Os desta POC ficam em [`areas/`](../areas), um arquivo por área, com os sete serviços no GitHub. Um exemplo mais próximo de
 empresa está em [`crawl.example.yml`](../crawl.example.yml):
 
 ```yaml
@@ -95,6 +96,19 @@ projects:
 kafka:
   bootstrap: localhost:9092                # opcional: lê os consumer groups no final
 ```
+
+Para [grafo por área](areas.md), o arquivo ganha a área, o time padrão e as conexões:
+
+```yaml
+area: credito
+team: Crédito                   # time padrão; cada projeto pode ter o seu team:
+neo4j:
+  uri: bolt://neo4j-credito:7687
+hub:
+  uri: bolt://neo4j-hub:7687    # recebe os contratos e as chamadas que saem da área
+```
+
+Usuário e senha em `user` e `password` dentro de `neo4j:` e `hub:`. Sem `hub:`, o crawl grava só no `neo4j:`.
 
 Caminhos relativos são resolvidos a partir da pasta do próprio `crawl.yml`, e `~` vira o home do usuário.
 

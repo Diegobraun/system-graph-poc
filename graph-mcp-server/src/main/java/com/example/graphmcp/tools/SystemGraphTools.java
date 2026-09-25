@@ -3,6 +3,7 @@ package com.example.graphmcp.tools;
 import com.example.graphmcp.graph.EndpointKey;
 import com.example.graphmcp.graph.GraphClient;
 import com.example.graphmcp.graph.GraphQlAnalyzer;
+import com.example.graphmcp.graph.Hub;
 import com.example.graphmcp.graph.SchemaComparator;
 import com.example.graphmcp.graph.SchemaComparator.SchemaIssue;
 import com.example.graphmcp.graph.SchemaComparator.SchemaView;
@@ -10,6 +11,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -18,9 +20,7 @@ import java.util.regex.Pattern;
 import org.neo4j.driver.exceptions.Neo4jException;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
-import org.springframework.stereotype.Component;
 
-@Component
 public class SystemGraphTools {
 
     private static final String NOTES = "[(n:Note)-[:ABOUT]->(%s) | n {.id, .text, .author, .status, .createdAt}]";
@@ -32,18 +32,32 @@ public class SystemGraphTools {
     private static final Pattern GRAPHQL_FIELD = Pattern.compile("^[A-Z][A-Za-z0-9_]*\\.[A-Za-z_][A-Za-z0-9_]*$");
 
     private final GraphClient graph;
+    private final Hub hub;
+    private final String area;
 
-    public SystemGraphTools(GraphClient graph) {
+    public SystemGraphTools(GraphClient graph, Hub hub, String area) {
         this.graph = graph;
+        this.hub = hub;
+        this.area = area;
+    }
+
+    public String area() {
+        return area;
+    }
+
+    public Hub hub() {
+        return hub;
     }
 
     @Tool(name = "list_services", description = """
             Lists every service known in the system graph, with its repository, the commit it was extracted from and how many \
             endpoints it exposes. Services with indexed=false are referenced by others but were never extracted.""")
     public List<Map<String, Object>> listServices() {
-        return graph.read("""
+        List<Map<String, Object>> local = graph.read("""
                 MATCH (s:Service)
                 RETURN s.name AS service,
+                       s.area AS area,
+                       s.team AS team,
                        coalesce(s.indexed, false) AS indexed,
                        s.repository AS repository,
                        s.commitSha AS commitSha,
@@ -54,6 +68,45 @@ public class SystemGraphTools {
                        COUNT { (s)-[:CONSUMES]->() } AS consumes
                 ORDER BY service
                 """, Map.of());
+        if (!hub.enabled()) {
+            return local;
+        }
+        Map<String, Map<String, Object>> catalog = catalog();
+        List<Map<String, Object>> result = new ArrayList<>();
+        Set<Object> names = new HashSet<>();
+        for (Map<String, Object> row : local) {
+            Map<String, Object> copy = new LinkedHashMap<>(row);
+            Federation.annotate(List.of(copy), catalog);
+            names.add(copy.get("service"));
+            result.add(copy);
+        }
+        for (Map<String, Object> row : hub.tools().listServices()) {
+            if (names.add(row.get("service")) && Boolean.TRUE.equals(row.get("indexed"))) {
+                Map<String, Object> copy = new LinkedHashMap<>(row);
+                copy.put("origin", "hub");
+                result.add(copy);
+            }
+        }
+        return result;
+    }
+
+    @Tool(name = "list_areas", description = """
+            Lists the business areas of the company (each one keeps its own detailed graph), the teams and services of each \
+            area and which other areas it calls. Use it to find the area and team that own a service before asking them about a change.""")
+    public Map<String, Object> listAreas() {
+        GraphClient source = hub.enabled() ? hub.graph() : graph;
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("currentArea", area);
+        result.put("areas", source.read("""
+                MATCH (s:Service) WHERE s.area IS NOT NULL
+                WITH s.area AS area, collect(DISTINCT s.team) AS teams, collect(s.name) AS services
+                OPTIONAL MATCH (:Service {area: area})-[:CALLS]->(e:Endpoint)<-[:EXPOSES]-(o:Service)
+                WHERE o.area IS NOT NULL AND o.area <> area
+                WITH area, teams, services, collect(DISTINCT o.area) AS callsAreas, count(DISTINCT e) AS contractsUsedFromOtherAreas
+                RETURN area, teams, services, callsAreas, contractsUsedFromOtherAreas
+                ORDER BY area
+                """, Map.of()));
+        return result;
     }
 
     @Tool(name = "service_overview", description = """
@@ -62,9 +115,45 @@ public class SystemGraphTools {
             Kafka topics it publishes and consumes (with the other side of each topic), services that depend on it, \
             calls seen at runtime by an APM when imported, and team notes about it. Use it to understand a service before working on it.""")
     public Map<String, Object> serviceOverview(@ToolParam(description = "Service name, same as spring.application.name, e.g. account-service") String service) {
+        Map<String, Object> local = localOverview(service);
+        if (!hub.enabled()) {
+            return local;
+        }
+        Map<String, Object> remote = hub.tools().serviceOverview(service);
+        if (remote.containsKey("error")) {
+            return local;
+        }
+        if (local.containsKey("error") || !Boolean.TRUE.equals(local.get("indexed"))) {
+            if (!Boolean.TRUE.equals(remote.get("indexed"))) {
+                return local.containsKey("error") ? remote : local;
+            }
+            Map<String, Object> result = new LinkedHashMap<>(remote);
+            result.put("origin", "hub");
+            result.put("note", "%s belongs to area %s (team %s). The hub only keeps contracts and calls between areas; calls inside that area are in the MCP server of %s."
+                    .formatted(service, remote.get("area"), remote.get("team"), remote.get("area")));
+            return result;
+        }
+        Map<String, Object> result = new LinkedHashMap<>(local);
+        result.put("exposes", Federation.mergeMatching(local.get("exposes"), remote.get("exposes"),
+                e -> e.get("method") + " " + e.get("path"), "calledBy", null));
+        result.put("publishes", Federation.mergeMatching(local.get("publishes"), remote.get("publishes"),
+                p -> p.get("topic") + "|" + p.get("via"), "consumers", null));
+        result.put("consumes", Federation.mergeMatching(local.get("consumes"), remote.get("consumes"),
+                c -> c.get("topic") + "|" + c.get("via"), "producers", null));
+        result.put("dependents", Federation.unionValues(local.get("dependents"), remote.get("dependents")));
+        if (result.get("area") == null) {
+            result.put("area", remote.get("area"));
+            result.put("team", remote.get("team"));
+        }
+        return result;
+    }
+
+    private Map<String, Object> localOverview(String service) {
         List<Map<String, Object>> rows = graph.read("""
                 MATCH (s:Service {name: $service})
                 RETURN s.name AS service,
+                       s.area AS area,
+                       s.team AS team,
                        coalesce(s.indexed, false) AS indexed,
                        s.repository AS repository,
                        s.commitSha AS commitSha,
@@ -95,11 +184,44 @@ public class SystemGraphTools {
             For a Kafka topic, lists producers, consumers declared in code, and consumer groups actually observed \
             in the Kafka cluster at runtime. A runtime consumer missing from the declared list is a hidden dependency.""")
     public Map<String, Object> whoConsumes(@ToolParam(description = "Kafka topic name, e.g. account-opened") String topic) {
+        Map<String, Object> local = localWhoConsumes(topic);
+        if (!hub.enabled()) {
+            return withTopicAreas(local, localCatalog());
+        }
+        Map<String, Object> remote = hub.tools().whoConsumes(topic);
+        if (remote.containsKey("error")) {
+            return withTopicAreas(local, catalog());
+        }
+        if (local.containsKey("error")) {
+            Map<String, Object> result = new LinkedHashMap<>(remote);
+            result.put("origin", "hub");
+            return withTopicAreas(result, catalog());
+        }
+        Map<String, Object> result = new LinkedHashMap<>(local);
+        result.put("producers", Federation.union(local.get("producers"), remote.get("producers"), p -> p.get("service")));
+        result.put("declaredConsumers", Federation.union(local.get("declaredConsumers"), remote.get("declaredConsumers"), c -> c.get("service")));
+        return withTopicAreas(result, catalog());
+    }
+
+    private Map<String, Object> withTopicAreas(Map<String, Object> result, Map<String, Map<String, Object>> catalog) {
+        if (result.containsKey("error")) {
+            return result;
+        }
+        Map<String, Object> copy = new LinkedHashMap<>(result);
+        for (String field : List.of("producers", "declaredConsumers")) {
+            List<Map<String, Object>> entries = copies(copy.get(field));
+            Federation.annotate(entries, catalog);
+            copy.put(field, entries);
+        }
+        return copy;
+    }
+
+    private Map<String, Object> localWhoConsumes(String topic) {
         List<Map<String, Object>> rows = graph.read("""
                 MATCH (t:Topic {name: $topic})
                 RETURN t.name AS topic,
-                       [(p:Service)-[r:PUBLISHES]->(t) | {service: p.name, via: r.via, payloadType: r.payloadType, location: r.location}] AS producers,
-                       [(c:Service)-[r:CONSUMES]->(t) | {service: c.name, repository: c.repository, via: r.via, group: r.group, payloadType: r.payloadType, location: r.location}] AS declaredConsumers,
+                       [(p:Service)-[r:PUBLISHES]->(t) | {service: p.name, area: p.area, team: p.team, repository: p.repository, via: r.via, payloadType: r.payloadType, location: r.location}] AS producers,
+                       [(c:Service)-[r:CONSUMES]->(t) | {service: c.name, area: c.area, team: c.team, repository: c.repository, via: r.via, group: r.group, payloadType: r.payloadType, location: r.location}] AS declaredConsumers,
                        [(c:Service)-[r:OBSERVED_CONSUMING]->(t) | {service: c.name, activeMembers: r.activeMembers, state: r.state, observedAt: r.observedAt}] AS observedConsumers,
                        %s AS notes
                 """.formatted(NOTES.formatted("t")), Map.of("topic", topic));
@@ -118,6 +240,26 @@ public class SystemGraphTools {
     public Map<String, Object> impactOfChange(
             @ToolParam(description = "Service that owns the contract, e.g. account-service") String service,
             @ToolParam(description = "Kafka topic (account-opened), endpoint (GET /accounts/{id} or /accounts/{id}), GraphQL operation (QUERY customer) or GraphQL field (Customer.monthlyIncome)") String contract) {
+        Map<String, Object> local = localImpact(service, contract);
+        if (!hub.enabled()) {
+            return withAreas(local, localCatalog());
+        }
+        Map<String, Object> remote = hub.tools().impactOfChange(service, contract);
+        Map<String, Object> result;
+        if (local.containsKey("error")) {
+            result = remote.containsKey("error") ? local : new LinkedHashMap<>(remote);
+            if (!remote.containsKey("error")) {
+                result.put("origin", "hub");
+            }
+        } else if (remote.containsKey("error")) {
+            result = local;
+        } else {
+            result = mergeImpact(local, remote);
+        }
+        return withAreas(result, catalog());
+    }
+
+    private Map<String, Object> localImpact(String service, String contract) {
         List<Map<String, Object>> topicRelations = graph.read("""
                 MATCH (:Service {name: $service})-[r:PUBLISHES|CONSUMES]->(t:Topic {name: $contract})
                 RETURN collect(DISTINCT type(r)) AS relations
@@ -131,6 +273,87 @@ public class SystemGraphTools {
             return graphQlFieldImpact(service, contract.trim());
         }
         return endpointImpact(service, contract);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> mergeImpact(Map<String, Object> local, Map<String, Object> remote) {
+        Map<String, Object> result = new LinkedHashMap<>(local);
+        switch (String.valueOf(local.get("kind"))) {
+            case "kafka-topic" -> {
+                result.put("affectedServices", Federation.union(local.get("affectedServices"), remote.get("affectedServices"), a -> a.get("service")));
+                if (local.containsKey("producers") || remote.containsKey("producers")) {
+                    result.put("producers", Federation.union(local.get("producers"), remote.get("producers"), p -> p.get("service")));
+                }
+                Map<String, SchemaView> schemas = new LinkedHashMap<>();
+                for (Object list : List.of(local.get("schemas"), remote.get("schemas"))) {
+                    for (SchemaView view : (List<SchemaView>) list) {
+                        schemas.putIfAbsent(view.service() + "|" + view.side() + "|" + view.className(), view);
+                    }
+                }
+                List<SchemaView> merged = new ArrayList<>(schemas.values());
+                result.put("schemas", merged);
+                result.put("schemaIssues", SchemaComparator.compare((String) local.get("contract"), merged));
+            }
+            case "graphql-field" -> {
+                result.put("affectedServices", Federation.union(local.get("affectedServices"), remote.get("affectedServices"), a -> a.get("service") + "|" + a.get("location")));
+                result.put("otherGraphQlClients", Federation.union(local.get("otherGraphQlClients"), remote.get("otherGraphQlClients"), a -> a.get("service") + "|" + a.get("location")));
+            }
+            default -> result.put("endpoints", Federation.mergeMatching(local.get("endpoints"), remote.get("endpoints"),
+                    e -> e.get("key"), "callers", c -> c.get("service") + "|" + c.get("location")));
+        }
+        result.put("notes", Federation.union(local.get("notes"), remote.get("notes"), n -> n.get("id")));
+        return result;
+    }
+
+    private Map<String, Object> withAreas(Map<String, Object> result, Map<String, Map<String, Object>> catalog) {
+        if (result.containsKey("error") || catalog.values().stream().allMatch(s -> s.get("area") == null)) {
+            return result;
+        }
+        Map<String, Object> copy = new LinkedHashMap<>(result);
+        Set<String> affected = new LinkedHashSet<>();
+        for (String field : List.of("affectedServices", "producers", "otherGraphQlClients")) {
+            if (copy.containsKey(field)) {
+                List<Map<String, Object>> entries = copies(copy.get(field));
+                Federation.annotate(entries, catalog);
+                copy.put(field, entries);
+                if (!"otherGraphQlClients".equals(field)) {
+                    entries.forEach(e -> affected.add(String.valueOf(e.get("service"))));
+                }
+            }
+        }
+        if (copy.containsKey("endpoints")) {
+            List<Map<String, Object>> endpoints = new ArrayList<>();
+            for (Map<String, Object> endpoint : Federation.maps(copy.get("endpoints"))) {
+                Map<String, Object> e = new LinkedHashMap<>(endpoint);
+                List<Map<String, Object>> callers = copies(e.get("callers"));
+                Federation.annotate(callers, catalog);
+                callers.forEach(c -> affected.add(String.valueOf(c.get("service"))));
+                e.put("callers", callers);
+                endpoints.add(e);
+            }
+            copy.put("endpoints", endpoints);
+        }
+        Map<String, Object> owner = catalog.get(String.valueOf(copy.get("service")));
+        Object ownerArea = owner == null ? null : owner.get("area");
+        copy.put("ownerArea", ownerArea);
+        copy.put("ownerTeam", owner == null ? null : owner.get("team"));
+        affected.remove(String.valueOf(copy.get("service")));
+        copy.put("affectedAreas", Federation.affectedAreas(affected, catalog, ownerArea == null ? null : ownerArea.toString()));
+        return copy;
+    }
+
+    private Map<String, Map<String, Object>> catalog() {
+        return hub.enabled() ? Federation.byName(hub.catalog()) : localCatalog();
+    }
+
+    private Map<String, Map<String, Object>> localCatalog() {
+        return Federation.byName(graph.read("MATCH (s:Service) RETURN s.name AS name, s.area AS area, s.team AS team, coalesce(s.indexed, false) AS indexed", Map.of()));
+    }
+
+    private static List<Map<String, Object>> copies(Object value) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        Federation.maps(value).forEach(m -> result.add(new LinkedHashMap<>(m)));
+        return result;
     }
 
     @Tool(name = "compare_event_schemas", description = """
@@ -151,6 +374,64 @@ public class SystemGraphTools {
             but not declared in code, producer/consumer payload mismatches and, when APM data was imported, runtime calls \
             missing from the code graph.""")
     public Map<String, Object> findContractIssues() {
+        Map<String, Object> local = localIssues();
+        if (!hub.enabled()) {
+            return local;
+        }
+        Set<String> mine = new HashSet<>();
+        graph.read("MATCH (s:Service {indexed: true}) RETURN s.name AS name", Map.of()).forEach(r -> mine.add((String) r.get("name")));
+        Set<String> myTopics = new HashSet<>();
+        graph.read("MATCH (s:Service {indexed: true})-[:PUBLISHES|CONSUMES]->(t:Topic) RETURN DISTINCT t.name AS name", Map.of())
+                .forEach(r -> myTopics.add((String) r.get("name")));
+        List<Map<String, Object>> issues = new ArrayList<>();
+        Set<Object> messages = new HashSet<>();
+        Set<String> indexedElsewhere = new HashSet<>();
+        catalog().forEach((name, row) -> {
+            if (Boolean.TRUE.equals(row.get("indexed")) && !mine.contains(name)) {
+                indexedElsewhere.add(name);
+            }
+        });
+        for (Map<String, Object> issue : Federation.maps(local.get("issues"))) {
+            if (keepLocal(issue, mine, indexedElsewhere) && messages.add(issue.get("message"))) {
+                issues.add(issue);
+            }
+        }
+        for (Map<String, Object> issue : Federation.maps(hub.tools().findContractIssues().get("issues"))) {
+            if (involves(issue, mine, myTopics) && messages.add(issue.get("message"))) {
+                Map<String, Object> copy = new LinkedHashMap<>(issue);
+                copy.put("origin", "hub");
+                issues.add(copy);
+            }
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("issueCount", issues.size());
+        result.put("issues", issues);
+        return result;
+    }
+
+    static boolean keepLocal(Map<String, Object> issue, Set<String> mine, Set<String> indexedElsewhere) {
+        Map<?, ?> details = issue.get("details") instanceof Map<?, ?> d ? d : Map.of();
+        return switch (String.valueOf(issue.get("area"))) {
+            case "http", "graphql" -> mine.contains(String.valueOf(details.get("target")));
+            case "schema" -> false;
+            case "kafka" -> String.valueOf(issue.get("message")).contains("in Kafka");
+            case "runtime" -> !indexedElsewhere.contains(String.valueOf(details.get("caller")));
+            default -> true;
+        };
+    }
+
+    static boolean involves(Map<String, Object> issue, Set<String> mine, Set<String> myTopics) {
+        Map<?, ?> details = issue.get("details") instanceof Map<?, ?> d ? d : Map.of();
+        return switch (String.valueOf(issue.get("area"))) {
+            case "http", "graphql" -> mine.contains(String.valueOf(details.get("caller"))) || mine.contains(String.valueOf(details.get("target")));
+            case "kafka" -> myTopics.contains(String.valueOf(details.get("topic")));
+            case "schema" -> mine.contains(String.valueOf(details.get("producer"))) || mine.contains(String.valueOf(details.get("consumer")));
+            case "runtime" -> mine.contains(String.valueOf(details.get("caller"))) || mine.contains(String.valueOf(details.get("target")));
+            default -> false;
+        };
+    }
+
+    private Map<String, Object> localIssues() {
         List<Map<String, Object>> issues = new ArrayList<>();
         for (Map<String, Object> row : graph.read("""
                 MATCH (c:Service)-[r:CALLS]->(e:Endpoint)
@@ -221,11 +502,13 @@ public class SystemGraphTools {
         List<Map<String, Object>> observedCalls = graph.read("""
                 MATCH (a:Service)-[r:OBSERVED_CALLS]->(b:Service)
                 RETURN a.name AS caller, b.name AS target, r.source AS source, r.count AS count,
+                       a.area AS callerArea, b.area AS targetArea,
                        coalesce(a.indexed, false) AS callerIndexed,
                        EXISTS { (a)-[:DEPENDS_ON]->(b) } AS inCode
                 """, Map.of());
         for (Map<String, Object> row : observedCalls) {
-            if (!(Boolean) row.get("inCode")) {
+            boolean insideOtherArea = area == null && row.get("callerArea") != null && row.get("callerArea").equals(row.get("targetArea"));
+            if (!(Boolean) row.get("inCode") && !insideOtherArea) {
                 issues.add(issue("warning", "runtime", (Boolean) row.get("callerIndexed")
                         ? "%s calls %s at runtime (seen by %s) but no call was found in the code of %s"
                                 .formatted(row.get("caller"), row.get("target"), row.get("source"), row.get("caller"))
@@ -281,7 +564,8 @@ public class SystemGraphTools {
     public Map<String, Object> graphModel() {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("nodes", Map.of(
-                "Service", "name, indexed, repository, commitSha, extractedAt, graphqlSchema (SDL text, when the service exposes GraphQL), contractSource ('openapi' when endpoints came from an imported spec instead of code)",
+                "Service", "name, area, team, indexed, repository, commitSha, extractedAt, graphqlSchema (SDL text, when the service exposes GraphQL), contractSource ('openapi' when endpoints came from an imported spec instead of code)",
+                "Area", "name (business area; this graph holds the detail of " + (area == null ? "every area" : "area " + area) + ")",
                 "Endpoint", "key ('service METHOD /path/{}' for HTTP, 'service QUERY field' for GraphQL), service, method, path, protocol (http|graphql)",
                 "Topic", "name",
                 "Schema", "key, service, topic, side (producer|consumer), className, fieldNames[], fieldTypes[]",
@@ -295,7 +579,8 @@ public class SystemGraphTools {
                 "(Service)-[:OBSERVED_CONSUMING {activeMembers, state, observedAt}]->(Topic)",
                 "(Service)-[:OBSERVED_CALLS {source (apm|dynatrace|...), count, observedAt}]->(Service)",
                 "(Service)-[:DEFINES]->(Schema)<-[:HAS_SCHEMA]-(Topic)",
-                "(Note)-[:ABOUT]->(Service|Topic|Endpoint)"));
+                "(Note)-[:ABOUT]->(Service|Topic|Endpoint)",
+                "(Service)-[:IN_AREA]->(Area)"));
         result.put("nodeCounts", graph.read("MATCH (n) RETURN labels(n)[0] AS label, count(*) AS count ORDER BY label", Map.of()));
         result.put("relationshipCounts", graph.read("MATCH ()-[r]->() RETURN type(r) AS type, count(*) AS count ORDER BY type", Map.of()));
         return result;
@@ -319,7 +604,7 @@ public class SystemGraphTools {
         result.put("contract", topic);
         result.put("kind", "kafka-topic");
         result.put("role", relations.contains("PUBLISHES") ? "producer" : "consumer");
-        Map<String, Object> consumers = whoConsumes(topic);
+        Map<String, Object> consumers = localWhoConsumes(topic);
         List<SchemaView> schemas = schemasOf(topic);
         if (relations.contains("PUBLISHES")) {
             Map<String, Map<String, Object>> affected = new LinkedHashMap<>();
@@ -330,6 +615,11 @@ public class SystemGraphTools {
                                 "declaredIn", String.valueOf(consumer.get("location")),
                                 "payloadType", String.valueOf(consumer.get("payloadType")),
                                 "via", String.valueOf(consumer.get("via"))));
+                Map<String, Object> entry = affected.get((String) consumer.get("service"));
+                if (consumer.get("area") != null) {
+                    entry.put("area", consumer.get("area"));
+                    entry.put("team", consumer.get("team"));
+                }
             }
             for (Object item : (List<?>) consumers.get("observedConsumers")) {
                 Map<?, ?> consumer = (Map<?, ?>) item;
@@ -383,7 +673,7 @@ public class SystemGraphTools {
             for (Map<String, Object> caller : graph.read("""
                     MATCH (c:Service)-[r:CALLS]->(e:Endpoint {key: $key})
                     MATCH (owner:Service {name: e.service})
-                    RETURN c.name AS service, c.repository AS repository, c.commitSha AS commitSha, r.via AS via,
+                    RETURN c.name AS service, c.area AS area, c.team AS team, c.repository AS repository, c.commitSha AS commitSha, r.via AS via,
                            r.location AS location, r.confidence AS confidence, r.source AS source,
                            r.document AS document, owner.graphqlSchema AS sdl
                     """, Map.of("key", endpoint.get("key")))) {
@@ -438,6 +728,8 @@ public class SystemGraphTools {
             GraphQlAnalyzer.Analysis analysis = GraphQlAnalyzer.analyze(sdl, (String) row.get("document"));
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("service", row.get("caller"));
+            entry.put("area", row.get("area"));
+            entry.put("team", row.get("team"));
             entry.put("repository", row.get("repository"));
             entry.put("location", row.get("location"));
             entry.put("operations", row.get("operations"));
@@ -466,7 +758,7 @@ public class SystemGraphTools {
                 MATCH (c:Service)-[r:CALLS]->(e:Endpoint {protocol: 'graphql'})
                 MATCH (t:Service {name: e.service})
                 WHERE ($target IS NULL OR t.name = $target) AND t.graphqlSchema IS NOT NULL AND r.document IS NOT NULL
-                RETURN c.name AS caller, c.repository AS repository, t.name AS target, t.graphqlSchema AS sdl,
+                RETURN c.name AS caller, c.area AS area, c.team AS team, c.repository AS repository, t.name AS target, t.graphqlSchema AS sdl,
                        r.document AS document, r.location AS location,
                        collect(e.method + ' ' + e.path) AS operations
                 """, parameters);

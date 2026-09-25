@@ -44,7 +44,7 @@ public final class ExperimentalCommands {
                   graph-extractor experimental extract-source --project <dir> [--out <file>]
                   graph-extractor experimental extract-jar --jar <app.jar> [--sources <dir|sources.jar>] [--libs "empresa-*.jar,*-client-*.jar"] [--out <file>]
                   graph-extractor experimental import-openapi --service <name> --spec <file|url> [neo4j options]
-                  graph-extractor experimental import-observed-calls --file <calls.json> [--source apm] [--names <names.yml>] [neo4j options]
+                  graph-extractor experimental import-observed-calls --file <calls.json> [--source apm] [--names <names.yml>] [--only-indexed] [neo4j options]
                   graph-extractor experimental import-dynatrace --url <https://tenant.live.dynatrace.com> [--token-env DT_API_TOKEN] [--names <names.yml>] [--dry-run] [neo4j options]
                 """;
     }
@@ -98,7 +98,7 @@ public final class ExperimentalCommands {
                 ObservedCallsImporter.readJson(Path.of(required(options, "file"))),
                 ObservedCallsImporter.readNames(options.containsKey("names") ? Path.of(options.get("names")) : null));
         String source = options.getOrDefault("source", "apm");
-        ObservedCallsImporter.write(Neo4jSettings.from(options), source, calls);
+        ObservedCallsImporter.write(Neo4jSettings.from(options), source, calls, options.containsKey("only-indexed"));
         calls.forEach(c -> System.out.printf("%s -> %s%n", c.from(), c.to()));
         System.out.printf("%d observed calls imported with source %s%n", calls.size(), source);
     }
@@ -117,7 +117,7 @@ public final class ExperimentalCommands {
             System.out.printf("%d service calls found, nothing written (dry run)%n", calls.size());
             return;
         }
-        ObservedCallsImporter.write(Neo4jSettings.from(options), "dynatrace", calls);
+        ObservedCallsImporter.write(Neo4jSettings.from(options), "dynatrace", calls, options.containsKey("only-indexed"));
         System.out.printf("%d service calls imported from Dynatrace%n", calls.size());
     }
 

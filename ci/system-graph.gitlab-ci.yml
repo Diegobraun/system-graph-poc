@@ -7,7 +7,10 @@
     - mvn -B -q compile -DskipTests
     - 'curl -sSfL --header "JOB-TOKEN: ${CI_JOB_TOKEN}" -o /tmp/graph-extractor.jar "${GRAPH_EXTRACTOR_URL}"'
     - java -jar /tmp/graph-extractor.jar extract --project . --out service-graph.json
-    - java -jar /tmp/graph-extractor.jar ingest service-graph.json
+    - >-
+      java -jar /tmp/graph-extractor.jar ingest service-graph.json
+      ${GRAPH_AREA:+--area "$GRAPH_AREA"} ${GRAPH_TEAM:+--team "$GRAPH_TEAM"}
+      ${GRAPH_HUB_URI:+--hub-uri "$GRAPH_HUB_URI" --hub-user "$GRAPH_HUB_USER" --hub-password "$GRAPH_HUB_PASSWORD"}
   artifacts:
     paths:
       - service-graph.json

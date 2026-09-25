@@ -1,11 +1,11 @@
 # graph-mcp-server
 
 MCP server em **Spring AI 1.1** que expõe o grafo para assistentes de IA. Transporte Streamable HTTP em
-`http://localhost:8090/mcp`.
+`/mcp`: 8090 no hub e 8091 a 8093 nas áreas.
 
 ![Mapa dos serviços na interface do system-graph](../docs/img/ui-map.jpg)
 
-*A [interface visual](../README.md#interface-visual) servida por este módulo em `http://localhost:8090`.*
+*A [interface visual](../README.md#interface-visual) servida por este módulo (hub em `http://localhost:8090`, áreas em 8091 a 8093).*
 
 ```bash
 mvn spring-boot:run
@@ -47,6 +47,8 @@ mvn spring-boot:run
 | Classe | Papel |
 |---|---|
 | `tools.SystemGraphTools` | Métodos `@Tool` registrados no MCP via `MethodToolCallbackProvider` |
+| `graph.Hub` | Conexão opcional com o hub e as tools rodando sobre ele |
+| `tools.Federation` | Junta resultados locais e do hub, anota área e time, calcula `affectedAreas` (com testes) |
 | `graph.GraphClient` | Acesso ao Neo4j: leitura em sessão READ com timeout e limite de linhas, conversão de tipos |
 | `graph.SchemaComparator` | Comparação de payload produtor x consumidor (com testes) |
 | `graph.GraphQlAnalyzer` | Valida documento GraphQL do cliente contra o schema do servidor e lista os campos usados (com testes) |
@@ -62,13 +64,21 @@ mvn spring-boot:run
 | `spring.ai.mcp.server.instructions` | texto que diz ao assistente quando usar cada tool |
 | `graph.query-timeout` | `5s` |
 | `graph.max-rows` | `200` |
+| `graph.area` | `${GRAPH_AREA:}`. Vazio: sem área, visão da empresa |
+| `graph.hub.uri` | `${GRAPH_HUB_URI:}`. Com valor, as tools completam as respostas com o hub |
+| `graph.hub.user`, `graph.hub.password` | `${GRAPH_HUB_USER:neo4j}`, `${GRAPH_HUB_PASSWORD:password123}` |
+| `graph.links` | `${GRAPH_LINKS:}`, `nome=url,...` para os links entre instâncias na interface |
+| `server.port` | `${SERVER_PORT:8090}` |
+
+Nesta POC sobem quatro instâncias: o hub em 8090 e uma por área em 8091 a 8093. Veja
+[docs/areas.md](../docs/areas.md).
 
 ## Conectando clientes
 
 Claude Code, pelo `.mcp.json` do repositório ou pela linha de comando:
 
 ```bash
-claude mcp add --transport http system-graph http://localhost:8090/mcp
+claude mcp add --transport http system-graph http://localhost:8091/mcp
 ```
 
 Sem assistente, para testar: `scripts/mcp-call.sh <tool> '<json>'` na raiz do projeto.

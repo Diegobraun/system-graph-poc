@@ -13,6 +13,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
 import org.neo4j.driver.AuthTokens;
 import org.neo4j.driver.Driver;
 import org.neo4j.driver.GraphDatabase;
@@ -26,7 +30,8 @@ public final class GraphIngestor implements AutoCloseable {
             "CREATE CONSTRAINT endpoint_key IF NOT EXISTS FOR (n:Endpoint) REQUIRE n.key IS UNIQUE",
             "CREATE CONSTRAINT topic_name IF NOT EXISTS FOR (n:Topic) REQUIRE n.name IS UNIQUE",
             "CREATE CONSTRAINT schema_key IF NOT EXISTS FOR (n:Schema) REQUIRE n.key IS UNIQUE",
-            "CREATE CONSTRAINT note_id IF NOT EXISTS FOR (n:Note) REQUIRE n.id IS UNIQUE");
+            "CREATE CONSTRAINT note_id IF NOT EXISTS FOR (n:Note) REQUIRE n.id IS UNIQUE",
+            "CREATE CONSTRAINT area_name IF NOT EXISTS FOR (n:Area) REQUIRE n.name IS UNIQUE");
 
     private final Driver driver;
 
@@ -42,14 +47,18 @@ public final class GraphIngestor implements AutoCloseable {
     }
 
     public void ingest(ServiceGraph graph) {
+        ingest(graph, Placement.NONE, call -> true);
+    }
+
+    public void ingest(ServiceGraph graph, Placement placement, Predicate<HttpCall> keepCall) {
         try (Session session = driver.session()) {
             session.executeWriteWithoutResult(tx -> {
                 Map<String, Object> base = Map.of("service", graph.service());
-                upsertService(tx, graph);
+                upsertService(tx, graph, placement);
                 tx.run("MATCH (s:Service {name: $service})-[r:EXPOSES|CALLS|DEPENDS_ON|PUBLISHES|CONSUMES]->() DELETE r", base);
                 tx.run("MATCH (s:Service {name: $service})-[:DEFINES]->(sc:Schema) DETACH DELETE sc", base);
                 exposes(tx, graph);
-                calls(tx, graph);
+                calls(tx, graph, keepCall);
                 publishes(tx, graph);
                 consumes(tx, graph);
                 schemas(tx, graph);
@@ -58,9 +67,32 @@ public final class GraphIngestor implements AutoCloseable {
         }
     }
 
-    private void upsertService(TransactionContext tx, ServiceGraph graph) {
+    public Set<String> servicesInArea(String area) {
+        try (Session session = driver.session()) {
+            return session.executeRead(tx -> tx.run("MATCH (s:Service {area: $area, indexed: true}) RETURN s.name AS name", Map.of("area", area))
+                    .stream().map(r -> r.get("name").asString()).collect(Collectors.toCollection(TreeSet::new)));
+        }
+    }
+
+    public void dropCallsInsideArea(String area) {
+        try (Session session = driver.session()) {
+            session.executeWriteWithoutResult(tx -> {
+                tx.run("""
+                        MATCH (c:Service {area: $area})-[r:CALLS]->(e:Endpoint)
+                        MATCH (:Service {name: e.service, area: $area})
+                        DELETE r
+                        """, Map.of("area", area));
+                tx.run("MATCH (:Service {area: $area})-[r:DEPENDS_ON]->(:Service {area: $area}) DELETE r", Map.of("area", area));
+            });
+            session.executeWriteWithoutResult(this::removeOrphans);
+        }
+    }
+
+    private void upsertService(TransactionContext tx, ServiceGraph graph, Placement placement) {
         Map<String, Object> parameters = new HashMap<>();
         parameters.put("service", graph.service());
+        parameters.put("area", placement.area());
+        parameters.put("team", placement.team());
         parameters.put("repository", graph.repository());
         parameters.put("graphqlSchema", graph.graphqlSchema());
         parameters.put("commitSha", graph.commitSha());
@@ -72,8 +104,20 @@ public final class GraphIngestor implements AutoCloseable {
                     s.commitSha = $commitSha,
                     s.extractedAt = $extractedAt,
                     s.ingestedAt = datetime(),
-                    s.indexed = true
+                    s.indexed = true,
+                    s.area = coalesce($area, s.area),
+                    s.team = coalesce($team, s.team)
                 """, parameters);
+        if (placement.area() != null) {
+            tx.run("""
+                    MATCH (s:Service {name: $service})
+                    MERGE (a:Area {name: $area})
+                    MERGE (s)-[:IN_AREA]->(a)
+                    WITH s, a
+                    MATCH (s)-[old:IN_AREA]->(other:Area) WHERE other <> a
+                    DELETE old
+                    """, parameters);
+        }
     }
 
     private void exposes(TransactionContext tx, ServiceGraph graph) {
@@ -96,10 +140,10 @@ public final class GraphIngestor implements AutoCloseable {
                 """, Map.of("service", graph.service(), "rows", rows));
     }
 
-    private void calls(TransactionContext tx, ServiceGraph graph) {
+    private void calls(TransactionContext tx, ServiceGraph graph, Predicate<HttpCall> keepCall) {
         List<Map<String, Object>> rows = new ArrayList<>();
         for (HttpCall call : graph.calls()) {
-            if (call.targetService() == null || call.targetService().equals("unknown")) {
+            if (call.targetService() == null || call.targetService().equals("unknown") || !keepCall.test(call)) {
                 continue;
             }
             Map<String, Object> row = new HashMap<>();

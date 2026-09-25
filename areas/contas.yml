@@ -1,0 +1,23 @@
+area: contas
+team: Contas Correntes
+workspace: ../..
+output: ../.system-graph/contas
+
+neo4j:
+  uri: bolt://localhost:7687
+hub:
+  uri: bolt://localhost:7690
+
+defaults:
+  pull: true
+  build: auto
+  offline: true
+  buildTimeoutMinutes: 10
+
+projects:
+  - git: https://github.com/Diegobraun/system-graph-account-service.git
+  - git: https://github.com/Diegobraun/system-graph-customer-service.git
+    team: Cadastro
+
+kafka:
+  bootstrap: localhost:9092
